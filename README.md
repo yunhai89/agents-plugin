@@ -41,8 +41,7 @@ QQ 群：**960179589** ｜ 作者 QQ：**3891977697**
 ## 📦 安装
 
 ```bash
-cd Yunzai/plugins
-git clone <repo-url> agents-plugin
+git clone https://gitee.com/YunXi-67/agents-plugin.git ./plugins/agents-plugin
 ```
 
 无需额外 `npm install`（依赖随 Yunzai 提供）。重启 Yunzai 后，首次启动自动在**插件自己的** `plugins/agents-plugin/config/config.yaml` 生成配置，填入 API Key 即可使用。
