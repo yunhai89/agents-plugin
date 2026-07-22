@@ -22,7 +22,6 @@ import {
   nodeScheduleAdapter,
   memoryKv,
   redisKv,
-  webSearchTool,
   noteTools,
   clarifyTool,
   checkInput,
@@ -39,6 +38,7 @@ import { detectCapabilities } from '../model/llm/capabilities.js'
 import { groupInfoTools, groupManageTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
 import { loadToolPacks } from '../model/toolkit/index.js'
+import { createSearchManager, makeSearchTools } from '../model/search/index.js'
 import { PersonaStore, PersonaService } from '../model/persona/index.js'
 import { VisionService, describeImages } from '../model/vision/index.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
@@ -167,8 +167,17 @@ async function buildRuntime() {
     try { skills.register(s) } catch (e) { Log.warn('[skill] 注册失败', s.name, e?.message || e) }
   }
 
+  // 统一搜索：多源自动路由（Tavily/Exa/Perplexity/Brave → SearXNG → DDG 兜底）
+  const searchManager = createSearchManager({
+    ...(cfg.search || {}),
+    fetcher: (typeof fetch !== 'undefined' && fetch) || undefined,
+    logger: Log.tag('search'),
+  })
+  const enabledSearch = searchManager.availableProviders
+  if (enabledSearch.length) Log.info('[search] 已启用搜索源：' + enabledSearch.join('、'))
+
   const tools = new ToolRegistry({ logger: Log.tag('tool') })
-    .register(webSearchTool)
+    .register(...makeSearchTools(searchManager)) // web_search（多源）+ web_extract
     .register(...noteTools({ kv: K }))
     .register(clarifyTool)
     .register(createMemoryTool(memory))
