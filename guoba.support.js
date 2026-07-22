@@ -130,7 +130,7 @@ export function supportGuoba() {
           field: 'agent.masterSkipConfirm',
           label: '主人任务免确认【高危】',
           helpMessage: '高危！开启后主人发起的确认类工具（如 terminal 写命令）跳过 #确认 直接执行。',
-          bottomHelpMessage: '⚠️ 高危：开启后主人的命令不再审批、直接执行（仅发高危提示）。denylist 灾难命令仍硬拦。开启即视为你知晓风险、自担后果。默认关。',
+          bottomHelpMessage: '⚠️ 高危：开启后主人的命令不再审批、直接执行（仅在控制台打印日志，不在聊天提示，防刷屏）。denylist 灾难命令仍硬拦。开启即视为你知晓风险、自担后果。默认关。',
           component: 'Switch',
         },
 

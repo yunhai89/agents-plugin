@@ -49,18 +49,6 @@ import { screenshot, renderReplyImage } from './render.js'
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
 const PLUGIN_ROOT = path.resolve(path.dirname(pathToFileURL(import.meta.url).pathname), '../..')
 
-/** 主人免确认自动执行的高危提示（持久，留审计记录） */
-function masterAutoApproveWarn(e, tc) {
-  const name = tc?.name || '?'
-  let detail = ''
-  if (name === 'terminal' && tc?.arguments?.command) {
-    detail = `\n$ ${String(tc.arguments.command).slice(0, 200)}`
-  } else {
-    try { detail = ' ' + JSON.stringify(tc?.arguments || {}).slice(0, 120) } catch { /* noop */ }
-  }
-  try { e.reply(`⚠️⚠️ 高危提示：主人任务【免确认】已自动执行 ${name}${detail}\n（masterSkipConfirm 已开启；denylist 命令仍会被拦）`) } catch { /* noop */ }
-}
-
 // ─── 进度反馈：工具调用时推送节流进度消息，消除"干等几十秒"的僵化感 ───
 // 真正的逐字流式依赖 QQ 适配器（icqq/napcat 差异大、编辑消息不稳），故默认只做可靠的进度反馈；
 // agent.stream=true 时才让 provider 流式（onDelta 可用，供未来适配器接入）。
@@ -517,7 +505,6 @@ export class Chat extends plugin {
         ctx, systemPrompt, context,
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
-        onMasterAutoApprove: (tc) => masterAutoApproveWarn(this.e, tc),
       })
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)

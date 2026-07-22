@@ -149,7 +149,7 @@ agent:
 | `systemPrompt` | 空 | 默认身份 system prompt（留空用富默认身份；被人设覆盖时失效） |
 | `chatPermission` | `master` | `#ai` 命令权限：`master`/`admin`/`owner`/`all` |
 | `masters` | `[]` | 接收审批通知的 master QQ 号列表 |
-| `masterSkipConfirm` | `false` | ⚠️高危：主人发起的确认类工具（terminal 写命令等）免 `#确认` 直接执行（仅主人，发高危提示；denylist 仍硬拦） |
+| `masterSkipConfirm` | `false` | ⚠️高危：主人发起的确认类工具（terminal 写命令等）免 `#确认` 直接执行（仅主人，控制台有日志不在聊天提示；denylist 仍硬拦） |
 | `confirmTimeout` | `300` | 审批超时自动拒绝（秒） |
 | `guardAction` | `flag` | 注入防御动作：`block`(拦截)/`flag`(隔离标注)/`sanitize`(脱敏) |
 | `guardSensitivity` | `medium` | 防御灵敏度：`low`(0.95)/`medium`(0.7)/`high`(0.5) |
