@@ -12,7 +12,7 @@ QQ 群：**960179589** ｜ 作者 QQ：**3891977697**
 - **多协议传输层**：OpenAI / Anthropic 双协议底层库（流式 SSE、重试退避、熔断、failover 连接池），一套代码接 DeepSeek / Kimi / MiMo / 通义 / 智谱 / Gemini 等任意兼容端点。
 - **ReAct Agent 内核**：九步 Turn Lifecycle，工具并行调用、对话多线程、向量召回记忆、注入防御 Guard、RBAC 策略 + 主人审批 Confirm。
 - **人设系统**：内置 5 种角色（默认/猫娘/管家/学者/海盗），用户一键切换、自建人设，作为身份层替换 system prompt，工具/记忆不缩水。
-- **多模态 + 视觉子模型（A 方案）**：自动收集消息/引用/合并转发/群文件中的图片文件；主模型不支持视觉时（如 MiMo 2.5 Pro），自动调视觉子模型（如 MiMo 2.5）把图转成文本描述、再由主模型回答。
+- **多模态 + 视觉子模型**：自动收集消息/引用/合并转发/群文件中的图片文件；主模型不支持视觉时（如 MiMo 2.5 Pro），自动调视觉子模型（如 MiMo 2.5）把图转成文本描述、再由主模型回答。
 - **深度研究**：`#研究 <主题>` 跑五阶段研究管线（Scope→Plan→Iterate→Synthesize→Cite→Evaluate），结果**优先 PDF 文件 → 高清长图 → 分段文本**三级下发。
 - **统一搜索**：Tavily / Exa / Perplexity / Brave 多源路由，无 key 自动回退 SearXNG，再兜底本地 DuckDuckGo（始终可用）。
 - **MCP 支持**：完整 Model Context Protocol 客户端（stdio / HTTP），多服务端管理、工具命名空间、按工具 RBAC。
@@ -133,7 +133,7 @@ policy:
 | `degrade` | `note` | 非视觉模型降级：`skip`/`note`/`text` |
 | `caps` | 空 | 覆盖模型能力判定（一般无需配置），如 `{ vision: true, file: true }` |
 
-### `agent.vision` —— 视觉子模型（A 方案）
+### `agent.vision` —— 视觉子模型
 
 主模型不支持视觉时，由视觉子模型识图 → 文本描述 → 主模型回答。主模型支持视觉则直发原图、不走此路径。默认复用主模型 `protocol/baseURL/apiKey`，只换 `model`。
 
@@ -370,7 +370,7 @@ model/
   ├─ search · tavily         统一搜索（多源路由 + DDG 兜底）
   ├─ research                深度研究五阶段管线 + 报告渲染
   ├─ media                   多模态文件收集/解析/协议转换
-  ├─ vision                  视觉子模型（A 方案识图）
+  ├─ vision                  视觉子模型识图
   ├─ miyoushe                米游社帖子搜索
   ├─ group                   群信息 + 群管理工具
   ├─ persona                 人设库 + 激活绑定
