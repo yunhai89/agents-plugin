@@ -239,6 +239,7 @@ async function buildRuntime() {
     guardAction: cfg.guardAction || 'flag',
     guardSensitivity: cfg.guardSensitivity || 'medium',
     policy: createPolicy({ categoryMin: cfg.policy?.categoryMin }),
+    confirm, // ConfirmStore 审批器：需确认的工具（terminal 写命令等）经它走主人 #确认/#拒绝
     // 留空时由 Agent 用富默认身份（model/prompt TEMPLATES.agent.system）；人设经 run opts.systemPrompt 覆盖
     systemPrompt: cfg.systemPrompt || undefined,
     maxTurns: cfg.maxTurns ?? 50,
