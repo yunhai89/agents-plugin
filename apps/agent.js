@@ -154,7 +154,8 @@ async function buildRuntime() {
   const K = getKv()
   const session = new SessionStore({ kv: K })
   const recall = new RecallStore({ kv: K })
-  const confirm = new ConfirmStore({ timeout: cfg.confirmTimeout || 300000 })
+  // confirmTimeout 配置单位是「秒」，ConfirmStore 用「毫秒」，这里换算（默认 300 秒）
+  const confirm = new ConfirmStore({ timeout: (cfg.confirmTimeout || 300) * 1000 })
   const scheduler = await nodeScheduleAdapter()
   const schedule = new ScheduleStore({ kv: K, scheduler })
   const persona = new PersonaService({ store: personaStore, kv: K })
