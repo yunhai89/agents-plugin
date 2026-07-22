@@ -73,6 +73,9 @@ export class Agent {
     this.blockedMessage = config.blockedMessage || '检测到潜在的指令注入，已拒绝处理。'
     this.policy = config.policy || null
     this.confirm = config.confirm || null
+    // 主人发起的任务免确认直执行（高危）：开启后 ctx.isMaster 的确认类工具跳过 #确认，
+    // 但经 onMasterAutoApprove 回调发"特别高危提示"。denylist 仍是硬底线（execute 里拦）。
+    this.masterSkipConfirm = config.masterSkipConfirm === true
     this.session = config.session || null
     this.recall = config.recall || null
     this.recallTopK = config.recallTopK ?? 5
@@ -101,6 +104,7 @@ export class Agent {
       onContextPressure: opts.onContextPressure,
       onApprove: opts.onApprove,
       onBeforeTool: opts.onBeforeTool,
+      onMasterAutoApprove: opts.onMasterAutoApprove,
     }
     const signal = opts.signal || null
     const taskId = opts.taskId || randomUUID()
@@ -355,7 +359,7 @@ export class Agent {
   }
 
   _extraRunOpts(opts) {
-    const reserved = new Set(['signal', 'onDelta', 'onReasoning', 'onToolStart', 'onToolEnd', 'onAssistant', 'onContextPressure', 'onApprove', 'onBeforeTool', 'taskId', 'stream', 'ctx'])
+    const reserved = new Set(['signal', 'onDelta', 'onReasoning', 'onToolStart', 'onToolEnd', 'onAssistant', 'onContextPressure', 'onApprove', 'onBeforeTool', 'onMasterAutoApprove', 'taskId', 'stream', 'ctx'])
     const out = {}
     for (const k of Object.keys(opts)) if (!reserved.has(k)) out[k] = opts[k]
     return out
@@ -403,6 +407,15 @@ export class Agent {
               this.logger('mark', 'tool auto-allow', tc.name, 'meta.shouldConfirm 否决审批（如 allowlist 命中）')
             }
           } catch { /* shouldConfirm 出错保守起见仍走确认 */ }
+        }
+        if (needConfirm) {
+          // 主人免确认（高危）：masterSkipConfirm 开启且当前是主人 → 跳过 #确认、发高危提示。
+          // denylist 仍是硬底线（execute 里拦），不会因免确认而放行灾难命令。
+          if (this.masterSkipConfirm && ctx?.isMaster) {
+            this.logger('warn', '⚠️ 主人任务免确认自动执行（高危）', tc.name, brief(tc.arguments))
+            cb.onMasterAutoApprove?.(tc)
+            needConfirm = false
+          }
         }
         if (needConfirm) {
           if (!this.confirm) {

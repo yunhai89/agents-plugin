@@ -126,6 +126,13 @@ export function supportGuoba() {
         { field: 'agent.guardAction', label: '注入防御动作', component: 'Select', componentProps: { options: OPT.guardAction } },
         { field: 'agent.guardSensitivity', label: '防御灵敏度', component: 'Select', componentProps: { options: OPT.guardSensitivity } },
         { field: 'agent.confirmTimeout', label: '审批超时(秒)', component: 'InputNumber', componentProps: { min: 10 } },
+        {
+          field: 'agent.masterSkipConfirm',
+          label: '主人任务免确认【高危】',
+          helpMessage: '高危！开启后主人发起的确认类工具（如 terminal 写命令）跳过 #确认 直接执行。',
+          bottomHelpMessage: '⚠️ 高危：开启后主人的命令不再审批、直接执行（仅发高危提示）。denylist 灾难命令仍硬拦。开启即视为你知晓风险、自担后果。默认关。',
+          component: 'Switch',
+        },
 
         // —— 视觉 ——
         { label: '视觉子模型', component: 'SOFT_GROUP_BEGIN' },

@@ -24,6 +24,7 @@ agent:
   memoryLimits:
   systemPrompt:
   chatPermission: master
+  masterSkipConfirm: false   # 主人发起的任务免确认直执行（高危！仅主人；denylist 仍拦）。开启后主人命令不再 #确认，但会发高危提示
   masters: []
   confirmTimeout: 300
   guardAction: flag
