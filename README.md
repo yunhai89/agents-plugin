@@ -1,35 +1,70 @@
-# agents-plugin
+<div align="center">
 
-> 基于 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) / [Miao-Yunzai](https://github.com/Le-niao/Yunzai-Bot) 的全功能 **AI Agent** 插件。
-> 一个插件打通：多模型对话 · 工具调用 · 长期记忆 · 人设切换 · 多模态识图 · 深度研究 · MCP · 群管 · 自我进化。
+# 🤖 agents-plugin
 
-QQ 群：**960179589** ｜ 作者 QQ：**3891977697**
+**基于 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) / [Miao-Yunzai](https://github.com/Le-niao/Yunzai-Bot) 的全功能 AI Agent 插件**
 
----
+一个插件打通：多模型对话 · 工具调用 · 长期记忆 · 人设 · 多模态识图 · MCP · 群管 · 终端 · 图片渲染
 
-## ✨ 项目亮点
+<img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License">
+<img src="https://img.shields.io/badge/platform-TRSS%2FMiao--Yunzai-9cf" alt="Platform">
+<img src="https://img.shields.io/badge/runtime-Node%20ESM-success" alt="Runtime">
+<img src="https://img.shields.io/badge/AI-Agent-orange" alt="AI Agent">
+<img src="https://img.shields.io/badge/QQ%E7%BE%A4-960179589-green" alt="QQ Group">
 
-- **多协议传输层**：OpenAI / Anthropic 双协议底层库（流式 SSE、重试退避、熔断、failover 连接池），一套代码接 DeepSeek / Kimi / MiMo / 通义 / 智谱 / Gemini 等任意兼容端点。
-- **ReAct Agent 内核**：九步 Turn Lifecycle，工具并行调用、对话多线程、向量召回记忆、注入防御 Guard、RBAC 策略 + 主人审批 Confirm。
-- **人设系统**：内置 5 种角色（默认/猫娘/管家/学者/海盗），用户一键切换、自建人设，作为身份层替换 system prompt，工具/记忆不缩水。
-- **多模态 + 视觉子模型**：自动收集消息/引用/合并转发/群文件中的图片文件；主模型不支持视觉时（如 MiMo 2.5 Pro），自动调视觉子模型（如 MiMo 2.5）把图转成文本描述、再由主模型回答。
-- **深度研究**：`#研究 <主题>` 跑五阶段研究管线（Scope→Plan→Iterate→Synthesize→Cite→Evaluate），结果**优先 PDF 文件 → 高清长图 → 分段文本**三级下发。
-- **统一搜索**：Tavily / Exa / Perplexity / Brave 多源路由，无 key 自动回退 SearXNG，再兜底本地 DuckDuckGo（始终可用）。
-- **MCP 支持**：完整 Model Context Protocol 客户端（stdio / HTTP），多服务端管理、工具命名空间、按工具 RBAC。
-- **群聊工具**：内置群信息查询 + 群管理（踢人/禁言/头衔/名片/管理员/改名）+ 米游社帖子搜索。
-- **工具开发 SDK**：像写 Yunzai 插件一样写自定义工具，丢进 `tools/` 目录即自动加载。
-- **自我进化（GEPA）**：离线遗传-帕累托提示词进化引擎，含语法门控、自适应变异温度、早停、段落交叉。
-- **全链路诊断日志**：分级日志（工具调用入参/结果、每轮 token、研究迭代进度），问题排查无忧。
-- **轻依赖**：纯 JS/ESM，复用 Yunzai 自带的 puppeteer / yaml / redis；仅 markdown 图片渲染需 marked / highlight.js（插件目录 `npm install`）。
-- **GPL-3.0**，进程内 Yunzai 插件友好。
+**QQ 群**：[960179589](https://qm.qq.com/q/960179589) ｜ **作者 QQ**：3891977697
+
+</div>
 
 ---
 
-## ⚠️ 安全声明（请务必阅读）
+> ## 🧪 功能状态提示
+>
+> **深度搜索、深度研究（`#研究`）目前处于早期开发阶段**，效果可能不稳定、质量参差，**甚至可能无法正常使用**。
+> 这两项依赖联网检索 + 多轮子代理编排，受搜索源可用性、模型能力、token 消耗等影响较大，仍在持续打磨。
+> 核心对话（多模型聊天 / 工具调用 / 记忆 / 人设 / 图片渲染 / MCP / 群管）是稳定可用的主力功能，请以核心对话为主，深度研究为辅。
+
+---
+
+## 📌 功能一览
+
+| 能力 | 说明 | 状态 |
+| --- | --- | --- |
+| 💬 多模型对话 | OpenAI / Anthropic 双协议，接 DeepSeek / Kimi / MiMo / 通义 / 智谱 / Gemini 等 | ✅ 稳定 |
+| 🖼️ 图片渲染回复 | markdown → 精美浅色图片（完整语法 + 代码高亮），失败退文本 | ✅ 稳定 |
+| 🔧 工具调用 | ReAct 内核、并行调用、RBAC + 主人审批、工具开发 SDK | ✅ 稳定 |
+| 🧠 长期记忆 | MEMORY.md/USER.md 人可编辑 + `memory_search` 主动召回（参考 OpenClaw） | ✅ 稳定 |
+| 🎭 人设系统 | 内置 5 角色 + 自建，替换身份层不缩水工具/记忆 | ✅ 稳定 |
+| 🖼️ 多模态识图 | 视觉子模型（主模型无视觉时图转文） | ✅ 稳定 |
+| 🔌 MCP | 完整 MCP 客户端（stdio / HTTP）、多服务端、按工具 RBAC | ✅ 稳定 |
+| 👥 群聊工具 | 群信息 / 群管理 / 米游社搜索 | ✅ 稳定 |
+| 💻 终端执行 | shell 执行（allowlist 免审 + 黑名单 + 主人审批，默认关，**高危**） | ⚠️ 高危可选 |
+| 🔍 统一搜索 | Tavily/Exa/Perplexity/Brave → SearXNG → DDG 兜底 | 🧪 早期 |
+| 📚 深度研究 | `#研究` 五阶段管线（规划→检索→综合→引用→评估） | 🧪 早期 |
+
+---
+
+## 📑 目录
+
+- [📦 安装](#-安装)
+- [🚀 快速开始](#-快速开始)
+- [⚙️ 详细配置](#️-详细配置pluginsagents-pluginconfigconfigyaml)
+- [🎮 指令](#-指令)
+- [🧩 自定义工具](#-自定义工具开发)
+- [🎓 技能系统](#-技能系统skills)
+- [🧠 记忆体系](#-记忆体系参考-openclaw文件即真相)
+- [💻 终端执行 + 审批](#-终端执行--审批allowlist-自动放行)
+- [🏗️ 架构](#️-架构)
+- [🔧 日志](#-日志与排查)
+- [📞 联系](#-联系)
+
+---
+
+## ⚠️ 安全声明
 
 本插件提供**终端（shell）执行能力**，属于**高危工具**：
 
-- shell 可在主机上执行**任意命令**，意味着可读写/删除文件、安装软件、访问网络、调用系统权限。
+- shell 可在主机上执行**任意命令**——读写/删除文件、安装软件、访问网络、调用系统权限。
 - 插件已做多层防护（仅主人可用、allowlist 只读命令免审、未知/写命令需主人 `#确认`、黑名单硬拦灾难性命令），**但任何防护都无法保证 100% 安全**——命令组合、解释器、环境差异等都可能绕过静态规则。
 - **终端默认关闭**（`agent.terminal.enable` 默认 `false`），需在配置里**单独手动开启**。
 - **开启 `agent.terminal.enable: true` 即表示你已知晓上述风险、同意自行承担一切后果，与开发者无关。** 开发者会尽量保证安全性，但不作任何担保。
@@ -48,15 +83,16 @@ cd ./plugins/agents-plugin && npm install      # 安装 markdown 渲染依赖（
 > 除 markdown 渲染（marked / marked-highlight / highlight.js，需在插件目录 `npm install`）外，其余依赖随 Yunzai 提供。`#agents更新`（git pull）后若 package.json 有变动，需重跑一次 `npm install`。
 > 重启 Yunzai 后，首次启动自动在**插件自己的** `plugins/agents-plugin/config/config.yaml` 生成配置，填入 API Key 即可使用。
 
-### 图片回复（默认开启）
-机器人回复**默认渲染成精美浅色图片**（完整 markdown + 代码语法高亮），渲染失败自动退文本。在配置里改 `agent.reply.mode`：
+### 🖼️ 图片回复（默认开启）
+
+机器人回复**默认渲染成精美浅色图片**（完整 markdown + 代码语法高亮），渲染失败自动退文本。配置 `agent.reply.mode`：
 - `image`（默认）：markdown → 浅色卡片图片（标题/列表/代码高亮/表格/引用全支持）
 - `text`：纯文本回复
 
 > 配置文件在插件目录内（不在 Yunzai 根）。若你之前用的是旧版 `Yunzai/config/agents-plugin.yaml`，首次加载会**自动迁移**到插件目录并删除旧文件（apiKey/masters 等全部保留）。
 > **支持热加载**：改完配置保存即可，**无需重启 Yunzai**——下次对话自动用新配置重建运行时（provider/model/tools/skills/mcp）。也可发 `#agents重载`（主人）立即重建。
 >
-> **锅巴（Guoba）适配**：已支持。安装 [Guoba-Plugin](https://gitee.com/guoba-yunzai/guoba-plugin) 后，`#锅巴登录` 进入 Web 面板即可图形化编辑本插件配置；保存后**自动热加载**（经 Config.save → 文件监听 → 运行时重建，无需重启）。适配文件为插件根 `guoba.support.js`。
+> **锅巴（Guoba）适配**：已支持。安装 [Guoba-Plugin](https://gitee.com/guoba-yunzai/guoba-plugin) 后，`#锅巴登录` 进入 Web 面板即可图形化编辑本插件配置；保存后**自动热加载**。适配文件为插件根 `guoba.support.js`。
 
 ---
 
@@ -178,9 +214,9 @@ persona:
   dir: ""   # 自定义人设目录（默认 data/agents-plugin/personas）
 ```
 
-### `agent.search` —— 统一搜索（深度研究的信息源）
+### `agent.search` —— 统一搜索 🧪早期
 
-任填一个 key 即用该源；都不填回退 SearXNG，再兜底 DDG。
+> 🧪 搜索为早期功能，效果取决于搜索源可用性。任填一个 key 即用该源；都不填回退 SearXNG，再兜底 DDG（始终可用）。
 
 ```yaml
 search:
@@ -192,7 +228,9 @@ search:
   ddg: true                  # 本地 DDG 兜底（默认开）
 ```
 
-### `agent.research` —— 深度研究
+### `agent.research` —— 深度研究 🧪早期
+
+> 🧪 **深度研究处于早期开发，效果可能差或不可用**（见顶部「功能状态提示」）。受搜索源、模型能力、token 消耗影响大，仅作辅助。
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
@@ -245,10 +283,10 @@ mcp:
 | `#删除人设 +id` | 删除（仅创建者/master） |
 | `#重置人设` | 恢复默认 |
 
-### 深度研究
+### 深度研究 🧪
 | 指令 | 说明 |
 | --- | --- |
-| `#研究 +主题` | 深度研究（结果 PDF→高清图→文本） |
+| `#研究 +主题` | 🧪 **早期功能**：深度研究（结果 PDF→高清图→文本），效果可能不稳定 |
 
 ### 记忆 / 提醒
 | 指令 | 说明 |
@@ -367,10 +405,11 @@ always: false             # 可选：true 则正文常驻
 ```
 apps/        事件分发与回复编排（agent 对话 / research 研究 / help / render）
 model/
+  ├─ render                 统一浅色主题 + markdown→图片渲染（marked/highlight.js）
   ├─ openai · anthropic      协议传输层（流式/重试/熔断/failover）
   ├─ llm                     模型能力注册表 + 熔断器 + 连接池 + embedding
   ├─ agent                   ReAct 内核 + 工具/会话/记忆/防护/策略/审批
-  ├─ prompt                  6 层 system prompt 构建 + 版本管理 + GEPA 桥
+  ├─ prompt                  分层 system prompt 构建（执行取向/工具目录/技能/安全）
   ├─ evolution               GEPA 提示词自我进化引擎
   ├─ mcp                     Model Context Protocol 客户端（多服务端）
   ├─ multiagent              编排器-工人 / pipeline / parallel / router
@@ -383,10 +422,11 @@ model/
   ├─ persona                 人设库 + 激活绑定
   └─ toolkit                 工具开发 SDK + 自动加载器
 tools/       自定义工具包（自动加载）
-utils/       Config 配置读写 · Log 分级日志
+skills/      技能说明书（SKILL.md，自动加载）
+utils/       Config 配置读写（插件目录 + 热加载） · Log 分级日志
 ```
 
-每个 `model/*` 模块均有离线自检（`node model/<模块>/test.mjs`），合计 **810+ 断言全绿**。
+每个 `model/*` 模块均有离线自检（`node model/<模块>/test.mjs`），合计 **960+ 断言全绿**。
 
 ---
 
@@ -398,7 +438,7 @@ utils/       Config 配置读写 · Log 分级日志
 
 ## 📞 联系
 
-- **QQ 群**：960179589
+- **QQ 群**：[960179589](https://qm.qq.com/q/960179589)
 - **作者 QQ**：3891977697
 
 问题反馈、功能建议、工具包分享欢迎进群交流。
