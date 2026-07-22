@@ -72,6 +72,13 @@ function selfStatus(runtime, cfg) {
   const names = (runtime?.agent?.tools?.names?.() || []).filter((n) => !n.startsWith('delegate__'))
   if (names.length) lines.push(`- 可用工具：${names.join('、')}`)
 
+  // 终端执行能力：以 terminal 工具是否注册为准（显式告知，避免模型误判"没有能力"）
+  if (names.includes('terminal')) {
+    lines.push('- 终端执行：✅已启用（工具名 `terminal`；可在主机执行 shell 命令，每条命令需主人 #确认，只读安全命令免审）')
+  } else {
+    lines.push('- 终端执行：❌未启用（配置 agent.terminal.enable: true 后 #agents重载 开启；未启用则无法在主机执行命令/装软件）')
+  }
+
   // 技能清单：列出可用 skill 名（与 system prompt 的 <available_skills> 目录双通道呼应）
   const skillNames = (runtime?.skills?.list?.() || []).map((s) => s.name).filter(Boolean)
   if (skillNames.length) lines.push(`- 可用技能：${skillNames.join('、')}（任务匹配时调用 skill 工具加载详情）`)
