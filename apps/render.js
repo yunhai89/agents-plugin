@@ -8,13 +8,40 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-/** 经 Yunzai 内置 renderer 截图（jpeg）。puppeteer 不可用时返回 null。 */
+let _shotSeq = 0
+
+/**
+ * 经 Yunzai 内置 renderer 截图（jpeg）。
+ *
+ * Yunzai 渲染器为「模板模式」：screenshot(name, data) 要求 data.tplFile（模板文件路径），
+ * 不支持裸 data.html；其 dealTpl 用 art-template 渲染模板。
+ * 本插件生成的 HTML 是自包含的纯 HTML（无 art-template 的 {{}} 语法），art-template 对其原样输出（已验证）。
+ * 故：把完整 HTML 写入临时文件作为 tplFile 传入，复用 Yunzai 已启动的 Chromium（Docker 等环境依赖此路径）。
+ *
+ * 用「name + 自增序号」做唯一 tplFile：保证每次都重新读取最新 HTML，避开渲染器的模板缓存
+ * （聊天列表 / 人设列表等内容会变化）。失败返回 null，调用方据此降级为文本。
+ */
 export async function screenshot(name, html) {
   try {
     const mod = await import('../../../lib/puppeteer/puppeteer.js')
     const puppeteer = mod.default || mod
-    if (puppeteer?.screenshot) return await puppeteer.screenshot(name, { html })
-    return null
+    if (!puppeteer?.screenshot) return null
+
+    const safe = String(name || 'agents').replace(/[\\/]/g, '_')
+    const dir = path.join(process.cwd(), 'temp', 'agents-plugin')
+    await fs.promises.mkdir(dir, { recursive: true }).catch(() => {})
+    // 清理同 name 的旧临时模板，避免磁盘无限堆积
+    try {
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith(`${safe}__`)) fs.unlinkSync(path.join(dir, f))
+      }
+    } catch { /* noop */ }
+    // 唯一文件名 → 渲染器每次缓存未命中 → 始终读取最新 HTML
+    _shotSeq = (_shotSeq + 1) % 100000
+    const tplFile = path.join(dir, `${safe}__${_shotSeq}.html`)
+    await fs.promises.writeFile(tplFile, String(html ?? ''))
+
+    return await puppeteer.screenshot(name, { tplFile, saveId: safe })
   } catch (e) {
     return null
   }
