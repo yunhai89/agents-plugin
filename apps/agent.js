@@ -44,7 +44,7 @@ import { VisionService, describeImages } from '../model/vision/index.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
-import { screenshot } from './render.js'
+import { screenshot, renderReplyImage } from './render.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
 const PLUGIN_ROOT = path.resolve(path.dirname(pathToFileURL(import.meta.url).pathname), '../..')
@@ -505,8 +505,21 @@ export class Chat extends plugin {
       })
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
-      const suffix = stopReason === 'max_turns' ? '\n（已达工具调用上限）' : ''
-      await this.e.reply(`${content || '(无回复)'}${suffix}`)
+      const suffix = stopReason === 'max_turns' ? '（已达工具调用上限）' : ''
+      // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
+      const replyMode = cfg.reply?.mode || 'image'
+      let delivered = false
+      if (replyMode === 'image' && content) {
+        try {
+          const img = await renderReplyImage(content)
+          if (img) { await this.e.reply(img); delivered = true }
+        } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
+      }
+      if (!delivered) {
+        await this.e.reply(`${content || '(无回复)'}${suffix ? `\n${suffix}` : ''}`)
+      } else if (suffix) {
+        await this.e.reply(suffix) // 图片已发，max_turns 提示作附注
+      }
       // 记录群内最近活跃时间，供 perception 判断"久未发言补课"
       if (ctx.isGroup && ctx.groupId && rt.kv) {
         rt.kv.set(`perception:last_active:${ctx.groupId}`, { at: Date.now() }).catch(() => {})

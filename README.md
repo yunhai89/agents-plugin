@@ -20,7 +20,7 @@ QQ 群：**960179589** ｜ 作者 QQ：**3891977697**
 - **工具开发 SDK**：像写 Yunzai 插件一样写自定义工具，丢进 `tools/` 目录即自动加载。
 - **自我进化（GEPA）**：离线遗传-帕累托提示词进化引擎，含语法门控、自适应变异温度、早停、段落交叉。
 - **全链路诊断日志**：分级日志（工具调用入参/结果、每轮 token、研究迭代进度），问题排查无忧。
-- **零新增运行时依赖**：纯 JS/ESM，复用 Yunzai 自带的 puppeteer / yaml / redis。
+- **轻依赖**：纯 JS/ESM，复用 Yunzai 自带的 puppeteer / yaml / redis；仅 markdown 图片渲染需 marked / highlight.js（插件目录 `npm install`）。
 - **GPL-3.0**，进程内 Yunzai 插件友好。
 
 ---
@@ -42,9 +42,16 @@ QQ 群：**960179589** ｜ 作者 QQ：**3891977697**
 
 ```bash
 git clone https://gitee.com/YunXi-67/agents-plugin.git ./plugins/agents-plugin
+cd ./plugins/agents-plugin && npm install      # 安装 markdown 渲染依赖（marked / highlight.js）
 ```
 
-无需额外 `npm install`（依赖随 Yunzai 提供）。重启 Yunzai 后，首次启动自动在**插件自己的** `plugins/agents-plugin/config/config.yaml` 生成配置，填入 API Key 即可使用。
+> 除 markdown 渲染（marked / marked-highlight / highlight.js，需在插件目录 `npm install`）外，其余依赖随 Yunzai 提供。`#agents更新`（git pull）后若 package.json 有变动，需重跑一次 `npm install`。
+> 重启 Yunzai 后，首次启动自动在**插件自己的** `plugins/agents-plugin/config/config.yaml` 生成配置，填入 API Key 即可使用。
+
+### 图片回复（默认开启）
+机器人回复**默认渲染成精美浅色图片**（完整 markdown + 代码语法高亮），渲染失败自动退文本。在配置里改 `agent.reply.mode`：
+- `image`（默认）：markdown → 浅色卡片图片（标题/列表/代码高亮/表格/引用全支持）
+- `text`：纯文本回复
 
 > 配置文件在插件目录内（不在 Yunzai 根）。若你之前用的是旧版 `Yunzai/config/agents-plugin.yaml`，首次加载会**自动迁移**到插件目录并删除旧文件（apiKey/masters 等全部保留）。
 > **支持热加载**：改完配置保存即可，**无需重启 Yunzai**——下次对话自动用新配置重建运行时（provider/model/tools/skills/mcp）。也可发 `#agents重载`（主人）立即重建。
@@ -100,6 +107,7 @@ agent:
 | `keepReasoning` | `false` | 是否把推理(`reasoning_content`)回灌历史；默认 `false` 省 context |
 | `stream` | `false` | 逐字流式输出（依赖适配器、不稳，默认关） |
 | `progress` | `true` | 工具调用时推送节流进度消息（消除"干等"，默认开） |
+| `reply.mode` | `image` | 回复渲染：`image`（markdown→浅色图片，默认）/ `text`（纯文本） |
 | `thinking` | 空 | 思考模式，如 `{ type: "enabled", budget_tokens: 16000 }` |
 | `memoryLimits` | 空 | 声明式记忆字符上限，如 `{ memory: 2200, user: 1375 }` |
 | `systemPrompt` | 空 | 默认身份 system prompt（留空用富默认身份；被人设覆盖时失效） |

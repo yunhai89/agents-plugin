@@ -1,8 +1,8 @@
 {
   "name": "agents-plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "基于 TRSS-Yunzai 的 AI Agents 插件",
-  "author": "your-name",
+  "author": "云汐",
   "license": "GPL-3.0",
   "type": "module",
   "main": "index.js",
@@ -16,5 +16,10 @@
   ],
   "scripts": {
     "lint": "eslint ."
+  },
+  "dependencies": {
+    "marked": "^14.1.0",
+    "marked-highlight": "^2.2.2",
+    "highlight.js": "^11.10.0"
   }
 }

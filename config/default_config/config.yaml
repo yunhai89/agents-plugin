@@ -19,6 +19,8 @@ agent:
   keepReasoning: false      # 是否把推理(reasoning_content)回灌历史（默认 false 省 context）
   stream: false             # 逐字流式输出（依赖适配器、不稳，默认关）
   progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
+  reply:
+    mode: image             # 回复渲染：image（markdown→精美浅色图片，默认）/ text（纯文本）；渲染失败自动退文本
   memoryLimits:
   systemPrompt:
   chatPermission: master

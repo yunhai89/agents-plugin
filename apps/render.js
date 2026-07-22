@@ -7,6 +7,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { buildHtml, mdToHtml } from '../model/render/index.js'
 
 let _shotSeq = 0
 
@@ -42,6 +43,20 @@ export async function screenshot(name, html) {
     await fs.promises.writeFile(tplFile, String(html ?? ''))
 
     return await puppeteer.screenshot(name, { tplFile, saveId: safe })
+  } catch (e) {
+    return null
+  }
+}
+
+/**
+ * 把一段文本（markdown）渲染成回复图片（segment.image），失败返回 null。
+ * markdown→HTML 用 marked+highlight.js（依赖缺失时自动降级为简易渲染）；截图经 Yunzai 渲染器。
+ */
+export async function renderReplyImage(content) {
+  try {
+    const bodyHtml = await mdToHtml(content)
+    const html = buildHtml({ bodyHtml })
+    return await screenshot('agents-plugin/reply', html)
   } catch (e) {
     return null
   }
