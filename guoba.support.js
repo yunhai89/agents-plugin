@@ -114,6 +114,12 @@ export function supportGuoba() {
         { field: 'agent.keepReasoning', label: '回灌推理(reasoning)到历史', bottomHelpMessage: '默认关：省 context', component: 'Switch' },
         { field: 'agent.stream', label: '逐字流式输出', bottomHelpMessage: '依赖适配器，不稳；默认关', component: 'Switch' },
         { field: 'agent.progress', label: '工具调用进度消息', bottomHelpMessage: '消除干等；默认开', component: 'Switch' },
+        { field: 'agent.reply.mode', label: '回复渲染方式', component: 'Select', componentProps: { options: [{ label: '图片（markdown→精美浅色图，默认）', value: 'image' }, { label: '纯文本', value: 'text' }] } },
+
+        // —— 深度思考 ——
+        { label: '深度思考（Thinking）', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.thinking.enable', label: '开启深度思考', bottomHelpMessage: 'Anthropic 等支持的扩展思考：模型先思考再作答（更慢、更耗 token，但复杂问题质量更高）', component: 'Switch' },
+        { field: 'agent.thinking.budget_tokens', label: '思考预算(tokens)', component: 'InputNumber', componentProps: { min: 1024, max: 64000, step: 1024 } },
 
         // —— 安全与审批 ——
         { label: '安全与审批', component: 'SOFT_GROUP_BEGIN' },
@@ -149,11 +155,23 @@ export function supportGuoba() {
         const data = JSON.parse(JSON.stringify(Config.get()))
         // masters 数组 → 多行文本（textarea 展示）
         if (Array.isArray(data?.agent?.masters)) data.agent.masters = data.agent.masters.join('\n')
+        // thinking：provider 原生 {type,budget_tokens}|null → 面板友好 {enable,budget_tokens}
+        const tk = data?.agent?.thinking
+        data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
         return data
       },
       // 保存配置（前端点确定后调用）；合并点路径 → Config.save → 强制热加载
       setConfigData(data, { Result }) {
         const cfg = Config.get()
+        // 深度思考：面板 {enable,budget_tokens} → provider 原生 {type:'enabled',budget_tokens}|null
+        if ('agent.thinking.enable' in (data || {})) {
+          const cur = cfg.agent?.thinking || {}
+          const enable = data['agent.thinking.enable']
+          const budget = data['agent.thinking.budget_tokens'] ?? cur.budget_tokens ?? 16000
+          cfg.agent.thinking = enable ? { type: 'enabled', budget_tokens: Number(budget) || 16000 } : null
+          delete data['agent.thinking.enable']
+          delete data['agent.thinking.budget_tokens']
+        }
         for (const [p, v] of Object.entries(data || {})) {
           let val = v
           if (p === 'agent.masters' && typeof val === 'string') {
