@@ -12,6 +12,7 @@
  *   Select: componentProps: { options: [{label, value}] }
  */
 import Config from './utils/Config.js'
+import Log from './utils/Log.js'
 
 /** 按点路径写入嵌套对象（不引 lodash） */
 function setPath(obj, path, value) {
@@ -150,7 +151,7 @@ export function supportGuoba() {
         if (Array.isArray(data?.agent?.masters)) data.agent.masters = data.agent.masters.join('\n')
         return data
       },
-      // 保存配置（前端点确定后调用）；合并点路径 → Config.save → 触发热加载
+      // 保存配置（前端点确定后调用）；合并点路径 → Config.save → 强制热加载
       setConfigData(data, { Result }) {
         const cfg = Config.get()
         for (const [p, v] of Object.entries(data || {})) {
@@ -162,6 +163,10 @@ export function supportGuoba() {
           setPath(cfg, p, val)
         }
         Config.save(cfg)
+        // save 已预更新内存 _data，文件监听的 reload 看不到变化、不会通知；
+        // 故显式强制 reload(true) 触发热加载（运行时重建）并打日志。
+        Log.mark('[guoba] 已通过锅巴保存配置，触发热加载')
+        Config.reload(true)
         return Result.ok({}, '保存成功（已自动热加载，无需重启）')
       },
     },

@@ -108,18 +108,18 @@ function load() {
   _data = deepMerge(def, readUser())
 }
 
-/** 重新读取并合并；内容变化才通知订阅者（去重，避免自发保存引发无谓重建） */
-function reload() {
+/** 重新读取并合并；内容变化（或 force=true）才通知订阅者（去重，避免自发保存引发无谓重建） */
+function reload(force = false) {
   migrateLegacy() // 自愈：若 config.yaml 缺失但 legacy 在，先拾取
   const def = readYamlDir(defaultDir)
   const next = deepMerge(def, readUser())
   const changed = JSON.stringify(next) !== JSON.stringify(_data)
   _data = next
-  if (changed) {
+  if (changed || force) {
     Log.mark('[config] 配置已热加载')
     for (const cb of _subscribers) { try { cb() } catch (e) { Log.warn('[config] 订阅回调出错', e?.message || e) } }
   }
-  return changed
+  return changed || force
 }
 
 /** 注册配置变更订阅；返回取消订阅函数 */

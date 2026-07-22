@@ -626,32 +626,34 @@ export class Chat extends plugin {
     return true
   }
 
-  // —— 更新插件：git pull 拉取最新代码 + 热加载（仅 master）——
+  // —— 更新插件：用 TRSS 提供的 Bot.exec 跑 git pull + 热加载（仅 master）——
   async agentsUpdate() {
     const dir = Config.path.plugin
-    try {
+    // 优先用 TRSS-Yunzai 的 Bot.exec（与 #更新 一致、自动打印命令日志到控制台）；不可用回退 child_process
+    const run = async (cmd) => {
+      if (typeof Bot !== 'undefined' && typeof Bot.exec === 'function') {
+        return Bot.exec(cmd, { cwd: dir }) // 返回 { error, stdout, stderr }
+      }
       try {
-        await pexec('git rev-parse --is-inside-work-tree', { cwd: dir })
-      } catch {
+        const r = await pexec(cmd, { cwd: dir, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 4 * 1024 * 1024 })
+        return { error: null, stdout: r.stdout || '', stderr: r.stderr || '' }
+      } catch (e) {
+        return { error: e, stdout: e.stdout || '', stderr: e.stderr || '' }
+      }
+    }
+    try {
+      const check = await run('git rev-parse --is-inside-work-tree')
+      if (check.error) {
         await this.e.reply('⚠️ 当前插件目录不是 git 仓库，无法自动更新（请用 git clone 安装本插件）。')
         return true
       }
       await this.e.reply('⏳ 正在拉取最新代码…')
-      let out
-      try {
-        // GIT_TERMINAL_PROMPT=0 防止凭证/合并提示挂起；--no-edit 自动完成合并提交
-        const r = await pexec('git pull --no-edit', {
-          cwd: dir,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
-          maxBuffer: 4 * 1024 * 1024,
-        })
-        out = `${r.stdout || ''}${r.stderr ? '\n' + r.stderr : ''}`
-      } catch (e) {
-        const msg = `${e.stdout || ''}${e.stderr || ''}${e.message || ''}`
-        await this.e.reply(`❌ 更新失败（可能有未提交的本地改动或冲突）：\n${String(msg).slice(0, 800)}`)
+      const r = await run('git pull --no-edit')
+      const text = `${r.stdout || ''}${r.stderr ? '\n' + (r.stderr) : ''}`.trim()
+      if (r.error) {
+        await this.e.reply(`❌ 更新失败（可能有未提交的本地改动或冲突）：\n${String(text || r.error.message).slice(0, 800)}`)
         return true
       }
-      const text = String(out).trim()
       // 拉取后热加载：配置/技能等数据级改动立即生效；JS 代码改动需重启 Yunzai
       try { Config.reload(); invalidateRuntime() } catch { /* noop */ }
       const upToDate = /Already up to date|已经是最新/i.test(text)
