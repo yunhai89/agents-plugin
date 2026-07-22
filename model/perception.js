@@ -1,0 +1,153 @@
+/**
+ * Perception —— 情境感知（数据层）。
+ *
+ * 与 Skill（说明书/指令）相对：perception 注入的是**事实数据**——
+ * 当前时间、发言者身份、机器人自身的工具/能力/运行时状态、近期聊天记录。
+ * 让 AI 对"自己、对方、环境"有准确认知，避免凭空臆测（如谎称"没有 MCP 功能"）。
+ *
+ * 这是框架内部数据，开发者扩展的是 skill（说明书），不是这里。
+ *
+ * 用法（apps 每轮）：
+ *   const perception = await buildSituationalContext({ ctx, runtime, e, kv, cfg })
+ *   agent.run(input, { ctx, context: perception })
+ */
+
+const MET_PREFIX = 'perception:met:' // 已感知过的群
+const ACTIVE_PREFIX = 'perception:last_active:' // 群内最近活跃
+const ABSENCE_MS = 6 * 60 * 60 * 1000 // 6 小时未发言视为"久离"
+
+const WEEK = ['日', '一', '二', '三', '四', '五', '六']
+
+function nowStr() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} 周${WEEK[d.getDay()]}`
+}
+
+function roleLabel(ctx) {
+  if (ctx?.isMaster) return '主人'
+  if (ctx?.role === 'owner') return '群主'
+  if (ctx?.role === 'admin') return '管理员'
+  return '普通成员'
+}
+
+/** 把消息段数组拼成可读文本（媒体标注类型） */
+export function messageToText(msg) {
+  const segs = msg?.message || msg?.content || []
+  const arr = Array.isArray(segs) ? segs : [segs]
+  const parts = []
+  for (const s of arr) {
+    if (!s || typeof s !== 'object') continue
+    if (s.type === 'text') parts.push(s.text || '')
+    else if (s.type === 'at') parts.push(`@${s.qq}`)
+    else if (s.type === 'image') parts.push('[图片]')
+    else if (s.type === 'face' || s.type === 'bface' || s.type === 'mface') parts.push('[表情]')
+    else if (s.type === 'record') parts.push('[语音]')
+    else if (s.type === 'video') parts.push('[视频]')
+    else if (s.type === 'file') parts.push(`[文件:${s.name || ''}]`)
+  }
+  return parts.join('').trim()
+}
+
+/** 格式化聊天记录为 "昵称: 文本"，剔除当前消息/空文本，时间正序、限量 */
+export function formatHistory(msgs, currentE, cap = 20) {
+  const curId = currentE?.message_id != null ? String(currentE.message_id) : null
+  const lines = []
+  for (const m of [].concat(msgs || [])) {
+    if (!m) continue
+    if (curId && m.message_id != null && String(m.message_id) === curId) continue
+    const nick = m?.sender?.card || m?.sender?.nickname || m?.user_id || '?'
+    const txt = messageToText(m)
+    if (txt) lines.push(`${nick}: ${txt}`)
+  }
+  return lines.slice(0, cap).reverse() // 适配器通常逆序返回，翻转为正序
+}
+
+/**
+ * 自我状态：工具清单 + MCP 协议/运行时 + 框架能力。核心让 AI"知道自己有什么"。
+ */
+function selfStatus(runtime, cfg) {
+  const lines = ['【自我状态】']
+  // 工具清单（排除编排用的 delegate__ 委派工具）
+  const names = (runtime?.agent?.tools?.names?.() || []).filter((n) => !n.startsWith('delegate__'))
+  if (names.length) lines.push(`- 可用工具：${names.join('、')}`)
+
+  // 技能清单：列出可用 skill 名（与 system prompt 的 <available_skills> 目录双通道呼应）
+  const skillNames = (runtime?.skills?.list?.() || []).map((s) => s.name).filter(Boolean)
+  if (skillNames.length) lines.push(`- 可用技能：${skillNames.join('、')}（任务匹配时调用 skill 工具加载详情）`)
+
+  // MCP：协议层支持 + 运行时接入数
+  let mcpConnected = 0
+  try {
+    const st = runtime?.mcp?.status?.() || {}
+    mcpConnected = Object.values(st).filter((s) => s?.status === 'connected').length
+  } catch { /* noop */ }
+  lines.push(`- MCP：框架已支持该协议；当前接入 ${mcpConnected} 个 MCP 服务端（0 = 协议可用但暂未接入，可让主人按 README 配置）`)
+
+  // 框架能力
+  const feats = []
+  if (cfg?.media?.enable !== false) feats.push('多模态(图片/文件)')
+  if (cfg?.vision?.model) feats.push('视觉识别(子模型)')
+  feats.push('深度研究(#研究)')
+  feats.push('人设切换(#人设)')
+  if (feats.length) lines.push(`- 框架能力：${feats.join('、')}`)
+
+  // 技能目录（供 skillhub 安装时 --dir 指向）
+  if (runtime?.skillsDir) lines.push(`- 技能目录：${runtime.skillsDir}（安装 SkillHub 技能时 --dir 指向它）`)
+  return lines.join('\n')
+}
+
+/** 近期聊天记录：首次入群（群信息+历史）或久离补课 */
+async function recentHistory({ ctx, e, kv, bot, historyCount }) {
+  if (!ctx?.isGroup || !ctx?.groupId || !kv) return null
+  const gid = ctx.groupId
+  const g = e?.group || bot?.pickGroup?.(gid) || null
+  const now = Date.now()
+
+  let met
+  try { met = await kv.get(`${MET_PREFIX}${gid}`) } catch { met = null }
+  let last
+  try { last = await kv.get(`${ACTIVE_PREFIX}${gid}`) } catch { last = null }
+
+  const isFirst = !met
+  const isAbsence = !isFirst && last?.at && now - last.at > ABSENCE_MS
+  if (!isFirst && !isAbsence) return null
+
+  const parts = []
+  // 群信息（仅首次）
+  if (isFirst && g?.getInfo) {
+    try {
+      const info = await g.getInfo()
+      parts.push(`群「${info?.group_name || gid}」｜成员 ${info?.member_count ?? '?'}/上限 ${info?.max_member_count ?? '?'}｜群主 ${info?.owner_id ?? '?'}`)
+    } catch { /* noop */ }
+  }
+  // 历史
+  if (g?.getChatHistory) {
+    try {
+      const seq = e?.seq ?? e?.message_id ?? e?.source?.seq ?? undefined
+      const msgs = await g.getChatHistory(seq, historyCount)
+      const lines = formatHistory(msgs, e)
+      if (lines.length) parts.push(`${isFirst ? '入群近期对话' : '久未发言后的近期对话'}：\n${lines.join('\n')}`)
+    } catch { /* noop */ }
+  }
+  // 标记已感知
+  try { await kv.set(`${MET_PREFIX}${gid}`, { at: now }) } catch { /* noop */ }
+  if (!parts.length) return null
+  return (isFirst ? `【入群感知】你刚进入群 ${gid}。` : '【久未发言补课】') + parts.join('\n')
+}
+
+/**
+ * 构建情境感知文本（每轮注入 system prompt）。
+ * @returns {Promise<string|null>}
+ */
+export async function buildSituationalContext({ ctx, runtime, e, kv, cfg, bot, historyCount = 15 } = {}) {
+  const parts = []
+  parts.push(`【当前时间】${nowStr()}`)
+  if (ctx?.isGroup) parts.push(`【发言者】${roleLabel(ctx)}（${ctx.userId}）。权限：${ctx.isMaster ? '可执行敏感指令' : '普通对话与查询类工具'}`)
+  parts.push(selfStatus(runtime, cfg))
+  const hist = await recentHistory({ ctx, e, kv, bot: bot || ctx?.bot, historyCount }).catch(() => null)
+  if (hist) parts.push(hist)
+  return parts.join('\n')
+}
+
+export { MET_PREFIX, ACTIVE_PREFIX }

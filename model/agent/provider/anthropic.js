@@ -1,0 +1,157 @@
+/**
+ * AnthropicProvider —— 包装 model/anthropic。
+ * 核心难点：统一消息 → Anthropic 格式（对应 Hermes anthropic_adapter.py）。
+ *   - system 提到顶层 system 参数
+ *   - assistant tool_calls → content blocks [tool_use]
+ *   - role:'tool' 结果 → user 消息内 [tool_result] blocks；连续（并行）合并为单条 user
+ *   - 强制 user/assistant 严格交替（相邻同角色合并）
+ *   - max_tokens 必填：未给默认 4096
+ */
+import { createClient, extractText, extractThinking, extractToolUses } from '../../anthropic/index.js'
+import { Provider, toolsToList, mapToolChoice, clientOpts } from './base.js'
+import { parseArgs } from '../messages.js'
+
+function mergeContent(a, b) {
+  const aa = Array.isArray(a) ? a : a ? [{ type: 'text', text: a }] : []
+  const bb = Array.isArray(b) ? b : b ? [{ type: 'text', text: b }] : []
+  return [...aa, ...bb]
+}
+
+/**
+ * 统一消息 → Anthropic messages + system。
+ * @returns {{ system: string|null, messages: Array }}
+ */
+export function toAnthropicMessages(messages, system) {
+  const sysParts = []
+  if (system) sysParts.push(system)
+
+  const raw = []
+  for (const m of messages) {
+    if (m.role === 'system') {
+      if (typeof m.content === 'string' && m.content) sysParts.push(m.content)
+      continue
+    }
+    if (m.role === 'user') {
+      raw.push({ role: 'user', content: m.content })
+    } else if (m.role === 'assistant') {
+      const blocks = []
+      if (m.content) blocks.push({ type: 'text', text: m.content })
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          const name = tc.function?.name || tc.name
+          const input = parseArgs(tc.function?.arguments ?? tc.arguments)
+          blocks.push({ type: 'tool_use', id: tc.id, name, input })
+        }
+      }
+      raw.push({ role: 'assistant', content: blocks.length ? blocks : '' })
+    } else if (m.role === 'tool') {
+      raw.push({
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: m.tool_call_id,
+            content: m.content ?? '',
+            ...(m.isError ? { is_error: true } : {}),
+          },
+        ],
+      })
+    }
+  }
+
+  // 合并相邻同角色（含并行工具结果 → 单条 user 多个 tool_result）
+  const merged = []
+  for (const m of raw) {
+    const last = merged[merged.length - 1]
+    if (last && last.role === m.role) {
+      last.content = mergeContent(last.content, m.content)
+    } else {
+      merged.push({ role: m.role, content: m.content })
+    }
+  }
+
+  // Anthropic 要求首条消息为 user
+  if (merged.length && merged[0].role !== 'user') {
+    merged.unshift({ role: 'user', content: '(开始)' })
+  }
+
+  const finalSystem = sysParts.filter(Boolean).join('\n\n') || null
+  return { system: finalSystem, messages: merged }
+}
+
+function resultFromResponse(res) {
+  const content = res.content || []
+  return {
+    role: 'assistant',
+    content: extractText(content),
+    toolCalls: extractToolUses(content),
+    reasoning: extractThinking(content),
+    finishReason: res.stop_reason ?? null,
+    usage: res.usage ?? null,
+    rawMessage: res,
+  }
+}
+
+function resultFromStream(s) {
+  return {
+    role: 'assistant',
+    content: s.text,
+    toolCalls: s.toolUses,
+    reasoning: s.thinking,
+    finishReason: s.stopReason,
+    usage: s.usage,
+    rawMessage: s.assistantMessage,
+  }
+}
+
+export class AnthropicProvider extends Provider {
+  constructor(config = {}) {
+    super(config)
+    this.client = config.client || createClient(clientOpts(config))
+  }
+
+  async chat(opts) {
+    const {
+      model, messages, system, tools, tool_choice, temperature, max_tokens, thinking,
+      top_p, top_k, signal, stream, onDelta, onReasoning, stop_sequences, ...rest
+    } = opts
+
+    const conv = toAnthropicMessages(messages, system)
+    const body = {
+      model: model || this.defaultModel,
+      max_tokens: max_tokens ?? 4096,
+      messages: conv.messages,
+      ...rest,
+    }
+    if (conv.system != null) body.system = conv.system
+
+    const list = toolsToList(tools)
+    if (list.length) {
+      body.tools = list.map((t) => ({
+        name: t.name,
+        description: t.description || '',
+        input_schema: t.parameters || { type: 'object', properties: {} },
+      }))
+      const tc = mapToolChoice(tool_choice, 'anthropic')
+      if (tc) body.tool_choice = tc
+    }
+    if (temperature != null) body.temperature = temperature
+    if (top_p != null) body.top_p = top_p
+    if (top_k != null) body.top_k = top_k
+    if (stop_sequences) body.stop_sequences = stop_sequences
+    if (thinking) body.thinking = thinking
+    if (stream) body.stream = true
+
+    if (stream) {
+      const s = await this.client.messages.create({ ...body, signal })
+      for await (const ev of s) {
+        if (ev.text && onDelta) onDelta(ev.text)
+        if (ev.thinking && onReasoning) onReasoning(ev.thinking)
+      }
+      return resultFromStream(s)
+    }
+
+    const res = await this.client.messages.create({ ...body, signal })
+    return resultFromResponse(res)
+  }
+}

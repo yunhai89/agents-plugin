@@ -1,0 +1,87 @@
+debug: false
+prefix: "#agents"
+
+agent:
+  trigger: at
+  triggerCommand: "#ai"
+  protocol: openai
+  preset: deepseek
+  baseURL: ""
+  apiKey: ""
+  model: "deepseek-chat"
+  reasoningFields: []
+  maxTurns: 50
+  temperature:
+  thinking:
+  maxTokens:              # 单次回复最大 token（留空=厂商默认；Anthropic 默认 4096）
+  contextWindow:          # 模型上下文窗口 token 数（如 32000）；超 80% 自动压缩历史、保留首条意图
+  maxToolResultChars: 4000  # 单条工具结果字符上限，超长截断防上下文膨胀
+  keepReasoning: false      # 是否把推理(reasoning_content)回灌历史（默认 false 省 context）
+  stream: false             # 逐字流式输出（依赖适配器、不稳，默认关）
+  progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
+  memoryLimits:
+  systemPrompt:
+  chatPermission: master
+  masters: []
+  confirmTimeout: 300
+  guardAction: flag
+  guardSensitivity: medium
+  policy:
+    categoryMin:
+  media:
+    enable: true
+    active: true
+    passive: true
+    maxImages: 4
+    maxFileBytes: 8388608
+    degrade: note
+    caps:
+  vision:
+    enable: true
+    model: ""
+    protocol:
+    preset:
+    baseURL: ""
+    apiKey: ""
+    maxTokens: 1024
+    describePrompt: ""
+  tools:
+    builtin: true
+    dir: "tools"
+  miyoushe:
+    cookie: ""
+    defaultGid: 2
+  persona:
+    dir: ""
+  skill:
+    builtin: true
+    dir: "skills"
+    historyCount: 15
+  search:
+    tavily:
+      apiKey: ""
+    exa:
+      apiKey: ""
+    perplexity:
+      apiKey: ""
+    brave:
+      apiKey: ""
+    searxng:
+      url: ""
+    ddg: true
+  research:
+    permission: master
+    maxRounds: 3
+    maxConcurrent: 3
+    workerModel: ""
+    evaluation: true
+  mcp:
+    requestTimeout: 60000
+    servers:
+  terminal:
+    # ⚠️ 高危：shell 可执行任意主机命令，防护（allowlist/黑名单/审批）无法 100% 保证安全。
+    # enable: true 即表示你知晓风险、同意自担后果，与开发者无关。默认关闭。
+    enable: false
+    maxTimeout: 600
+    blocklist: []
+    allowlist: []          # 只读安全命令正则集（空=用默认 ls/cat/grep/git status 等；命中且无重定向时免审批）

@@ -1,0 +1,171 @@
+/**
+ * 媒体解析 —— 把 MediaFile 描述符解析为 {buffer, mime, ext, bytes}。
+ *
+ * 框架优先：Bot.download(url) → {buffer}；Bot.fileType({file}) → {type:{mime,ext}}。
+ * 兜底自实现：无 Bot 时用 fetcher(node-fetch) 取字节 + inferMime 魔数嗅探（零依赖）。
+ * 链接发现：url 缺失时尝试 getFileUrl/fs.download（群文件场景）。
+ */
+
+const EXT_MIME = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+  pdf: 'application/pdf',
+  txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', log: 'text/plain',
+  html: 'text/html', htm: 'text/html', xml: 'application/xml', yaml: 'text/yaml', yml: 'text/yaml',
+  js: 'text/javascript', ts: 'text/typescript', py: 'text/x-python', java: 'text/x-java',
+  c: 'text/x-c', cpp: 'text/x-cpp', go: 'text/x-go', rs: 'text/x-rust', sh: 'application/x-sh',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4', flac: 'audio/flac',
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+  zip: 'application/zip', '7z': 'application/x-7z-compressed', gz: 'application/gzip', tar: 'application/x-tar',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+}
+
+const MIME_EXT = Object.fromEntries(Object.entries(EXT_MIME).map(([e, m]) => [m, e]))
+
+/** 魔数嗅探（零依赖）—— 命中常见格式；不命中返回 null */
+export function sniffMagic(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return null
+  const h = buf
+  // PNG / JPG / GIF / BMP
+  if (h[0] === 0x89 && h[1] === 0x50 && h[2] === 0x4e && h[3] === 0x47) return 'image/png'
+  if (h[0] === 0xff && h[1] === 0xd8 && h[2] === 0xff) return 'image/jpeg'
+  if (h[0] === 0x47 && h[1] === 0x49 && h[2] === 0x46) return 'image/gif'
+  if (h[0] === 0x42 && h[1] === 0x4d) return 'image/bmp'
+  // RIFF: webp / wav
+  if (h.length >= 12 && h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46) {
+    const fourcc = buf.toString('ascii', 8, 12)
+    if (fourcc === 'WEBP') return 'image/webp'
+    if (fourcc === 'WAVE') return 'audio/wav'
+  }
+  // PDF
+  if (h[0] === 0x25 && h[1] === 0x50 && h[2] === 0x44 && h[3] === 0x46) return 'application/pdf'
+  // ZIP 家族（docx/xlsx/pptx/zip/odt 等 —— 统称 zip，按扩展名细化在外层）
+  if (h[0] === 0x50 && h[1] === 0x4b && (h[2] === 0x03 || h[2] === 0x05 || h[2] === 0x07)) return 'application/zip'
+  // OGG
+  if (h[0] === 0x4f && h[1] === 0x67 && h[2] === 0x67 && h[3] === 0x53) return 'audio/ogg'
+  // ID3 / MP3
+  if (h[0] === 0x49 && h[1] === 0x44 && h[2] === 0x33) return 'audio/mpeg'
+  if (h[0] === 0xff && (h[1] === 0xfb || h[1] === 0xf3 || h[1] === 0xf2)) return 'audio/mpeg'
+  // MP4/M4A (ftyp)
+  if (h.length >= 12 && h[4] === 0x66 && h[5] === 0x74 && h[6] === 0x79 && h[7] === 0x70) return 'video/mp4'
+  return null
+}
+
+/** 综合名称扩展 + 魔数推断 mime */
+export function inferMime(name, buf) {
+  // 1) 名称扩展
+  const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]
+  if (ext && EXT_MIME[ext]) return { mime: EXT_MIME[ext], ext }
+  // 2) 魔数（对 zip 家族再用名称扩展细化 docx/xlsx 等）
+  const magic = sniffMagic(buf)
+  if (magic) {
+    if (magic === 'application/zip' && ext && /^(docx|xlsx|pptx|odt|ods|odp)$/.test(ext)) {
+      return { mime: EXT_MIME[ext] || magic, ext }
+    }
+    return { mime: magic, ext: MIME_EXT[magic] || ext || null }
+  }
+  // 3) 文本嗅探（无 NUL 字节 → utf8 文本）
+  if (Buffer.isBuffer(buf) && buf.length && !buf.slice(0, Math.min(buf.length, 1024)).includes(0)) {
+    return { mime: 'text/plain', ext: ext || 'txt' }
+  }
+  return { mime: 'application/octet-stream', ext: ext || 'bin' }
+}
+
+export function mimeFromName(name) {
+  const ext = String(name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1]
+  return ext ? EXT_MIME[ext] || null : null
+}
+
+export function asBase64(buf) {
+  return Buffer.isBuffer(buf) ? buf.toString('base64') : ''
+}
+
+/** 是否文本类（可直接 utf8 解码喂给模型） */
+export function isTextLike(mime) {
+  return !!mime && /^(text\/|application\/(json|xml|javascript|x-sh|x-python|x-yaml))/.test(mime)
+}
+
+/** 是否图片（视觉模型可识） */
+export function isImage(mime) {
+  return !!mime && mime.startsWith('image/')
+}
+
+/** 截断文本（按字符，避免超大文件撑爆上下文） */
+export function truncateText(buf, maxChars = 12000) {
+  const s = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf || '')
+  if (s.length <= maxChars) return s
+  return `${s.slice(0, maxChars)}\n…[已截断，共 ${s.length} 字符]`
+}
+
+/** 从 base64://、http(s)://、file://、裸路径等多种来源取 Buffer */
+async function toBuffer(source, { bot, fetcher }) {
+  if (Buffer.isBuffer(source)) return source
+  if (typeof source !== 'string') return null
+  // 框架优先：Bot.Buffer 统一处理所有形态（含临时 file:// 溢出）
+  if (bot?.Buffer) {
+    try { const b = await bot.Buffer(source, {}); if (Buffer.isBuffer(b)) return b } catch { /* noop */ }
+  }
+  if (source.startsWith('base64://')) return Buffer.from(source.slice(9), 'base64')
+  if (/^https?:\/\//i.test(source)) {
+    const f = fetcher || globalThis.fetch
+    if (f) {
+      const res = await f(source, { headers: { 'User-Agent': 'Mozilla/5.0 (agents-plugin)' } })
+      return Buffer.from(await res.arrayBuffer())
+    }
+  }
+  return null
+}
+
+/**
+ * 解析单个 MediaFile：补全 url（群文件）→ 下载字节 → 推断 mime/ext。
+ * 失败不抛错，置 resolveError，交由上层决定降级或跳过。
+ */
+export async function resolveMedia(mf, { bot, fetcher } = {}) {
+  if (!mf) return mf
+  if (mf.buffer) { // 已解析
+    if (!mf.mime) Object.assign(mf, inferMime(mf.name, mf.buffer))
+    if (mf.bytes == null) mf.bytes = mf.buffer.length
+    return mf
+  }
+
+  // 补全 url（群文件 / 离线文件无 url）
+  if (!mf.url && mf.fid) {
+    const pick = bot || null
+    try {
+      if (pick?.getFileUrl) mf.url = await pick.getFileUrl(mf.fid)
+      else if (pick?.fs?.download) mf.url = (await pick.fs.download(mf.fid, mf.busid))?.url || null
+    } catch { /* noop */ }
+  }
+
+  // 框架优先下载：Bot.download(url) → {buffer}
+  let buffer = null
+  if (mf.url && bot?.download) {
+    try { const r = await bot.download(mf.url); buffer = r?.buffer || null } catch { /* noop */ }
+  }
+  // 兜底：自实现取字节
+  if (!buffer && mf.url) {
+    try { buffer = await toBuffer(mf.url, { bot, fetcher }) } catch { /* noop */ }
+  }
+  // 段内联 base64（部分适配器 image 段的 file 字段是 base64://）
+  if (!buffer && mf.segment?.file && typeof mf.segment.file === 'string') {
+    try { buffer = await toBuffer(mf.segment.file, { bot, fetcher }) } catch { /* noop */ }
+  }
+
+  if (!buffer) {
+    mf.resolveError = mf.url ? 'download_failed' : 'no_url'
+    return mf
+  }
+
+  mf.buffer = buffer
+  mf.bytes = buffer.length
+  Object.assign(mf, inferMime(mf.name, buffer))
+  return mf
+}
+
+/** 批量解析（并发） */
+export async function resolveAll(list, opts) {
+  return Promise.all((list || []).map((m) => resolveMedia(m, opts)))
+}
+
+export { EXT_MIME, MIME_EXT }

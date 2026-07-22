@@ -1,0 +1,793 @@
+import plugin from '../../../lib/plugins/plugin.js'
+import path from 'node:path'
+import { exec } from 'node:child_process'
+import { promisify } from 'node:util'
+import { pathToFileURL } from 'node:url'
+
+const pexec = promisify(exec)
+
+import Config from '../utils/Config.js'
+import Log from '../utils/Log.js'
+import {
+  Agent,
+  createProvider,
+  ToolRegistry,
+  MemoryStore,
+  createMemoryTool,
+  makeRecallTool,
+  SessionStore,
+  RecallStore,
+  ScheduleStore,
+  ConfirmStore,
+  nodeScheduleAdapter,
+  memoryKv,
+  redisKv,
+  webSearchTool,
+  noteTools,
+  clarifyTool,
+  checkInput,
+  systemHardening,
+  createPolicy,
+  buildChatListHtml,
+  buildPersonaListHtml,
+} from '../model/agent/index.js'
+import { presets as openaiPresets } from '../model/openai/index.js'
+import { presets as anthropicPresets } from '../model/anthropic/index.js'
+import { McpManager } from '../model/mcp/index.js'
+import { createMediaService, makeMediaTools } from '../model/media/index.js'
+import { detectCapabilities } from '../model/llm/capabilities.js'
+import { groupInfoTools, groupManageTools } from '../model/group/index.js'
+import { miyousheTools } from '../model/miyoushe/index.js'
+import { loadToolPacks } from '../model/toolkit/index.js'
+import { PersonaStore, PersonaService } from '../model/persona/index.js'
+import { VisionService, describeImages } from '../model/vision/index.js'
+import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
+import { buildSituationalContext } from '../model/perception.js'
+import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
+import { screenshot } from './render.js'
+
+/** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
+const PLUGIN_ROOT = path.resolve(path.dirname(pathToFileURL(import.meta.url).pathname), '../..')
+
+// ─── 进度反馈：工具调用时推送节流进度消息，消除"干等几十秒"的僵化感 ───
+// 真正的逐字流式依赖 QQ 适配器（icqq/napcat 差异大、编辑消息不稳），故默认只做可靠的进度反馈；
+// agent.stream=true 时才让 provider 流式（onDelta 可用，供未来适配器接入）。
+const PROGRESS_LABELS = {
+  web_search: '🔍 联网搜索',
+  ddg: '🔍 联网搜索',
+  tavily: '🔍 联网搜索',
+  exa: '🔍 联网搜索',
+  brave: '🔍 联网搜索',
+  perplexity: '🔍 联网搜索',
+  skill: '📖 加载技能',
+  reload_skills: '🔄 重载技能',
+  read_attachment: '📎 读取附件',
+  get_group_file: '📎 获取文件',
+  list_group_files: '📎 列出文件',
+  get_weather: '🌤️ 查天气',
+  terminal: '💻 执行命令',
+  process: '💻 进程操作',
+  group_info: '⚙️ 查群信息',
+  group_members: '⚙️ 查成员',
+  group_member: '⚙️ 查成员',
+  group_kick: '⚙️ 群操作',
+  group_mute: '⚙️ 群操作',
+  group_mute_all: '⚙️ 群操作',
+  group_set_card: '⚙️ 群操作',
+  group_set_title: '⚙️ 群操作',
+  group_set_admin: '⚙️ 群操作',
+  group_set_name: '⚙️ 群操作',
+  miyoushe_search: '🎮 查米游社',
+}
+
+/**
+ * 构造进度反馈回调集合。
+ * @param {object} e Yunzai 事件
+ * @param {object} opts { progress:bool }
+ */
+function makeReplyStream(e, { progress = true } = {}) {
+  if (!progress) return {}
+  let lastAt = 0
+  let lastTool = null
+  let count = 0
+  const MIN_INTERVAL = 1500 // ms：节流，防刷屏
+  const MAX_MSGS = 8 // 单轮最多 8 条进度，防病态循环刷屏
+  return {
+    onToolStart(tc) {
+      if (count >= MAX_MSGS) return
+      const now = Date.now()
+      const name = tc?.name
+      if (!name) return
+      // 同工具 5s 内不重复 + 全局节流
+      if (name === lastTool && now - lastAt < 5000) return
+      if (now - lastAt < MIN_INTERVAL) return
+      lastAt = now
+      lastTool = name
+      count++
+      const label = PROGRESS_LABELS[name] || `🔧 调用 ${name}`
+      // recallMsg: 支持的适配器会在 60s 后自动撤回进度消息，保持聊天干净；不支持则忽略
+      try { e.reply(`${label}…`, false, { recallMsg: 60 }) } catch { /* noop */ }
+    },
+  }
+}
+
+/**
+ * agents-plugin 对话命令。
+ *   触发 AI：艾特机器人（默认）或自定义触发词（agent.trigger: at|command|both + triggerCommand）
+ *   #聊天列表 / #进入聊天 <id> / #new          多对话管理
+ *   #确认/#拒绝/#待确认（master）              审批
+ *   #记忆 / #忘掉 <kw>                         长期记忆
+ *   #我的提醒 / #取消提醒 <id>                  提醒
+ *   #模型切换 <id>（master）                    切换模型
+ *   #启用mcp <名> / #停止mcp <名>（master）     MCP 服务端启停
+ *   #mcp（master）                             MCP 状态
+ * 主人判定用 Yunzai 原生 permission:'master'（即 e.isMaster / cfg.master）。
+ */
+
+let _runtime = null
+
+function getKv() {
+  if (typeof globalThis !== 'undefined' && globalThis.redis) return redisKv(globalThis.redis)
+  return memoryKv()
+}
+
+async function buildRuntime() {
+  const cfg = Config.get().agent || {}
+  if (!cfg.apiKey) throw new Error(`未配置 agent.apiKey，请编辑「${Config.path.userConfig}」的 agent.apiKey（注意是 Yunzai 根目录的 config/，不是插件目录里的 default_config）`)
+
+  const protocol = cfg.protocol || 'openai'
+  const presetMap = protocol === 'anthropic' ? anthropicPresets : openaiPresets
+  const preset = cfg.preset ? presetMap[cfg.preset] : {}
+  const provider = createProvider({
+    protocol,
+    ...preset,
+    ...(cfg.baseURL ? { baseURL: cfg.baseURL } : {}),
+    apiKey: cfg.apiKey,
+    model: cfg.model,
+    ...(cfg.reasoningFields ? { reasoningFields: cfg.reasoningFields } : {}),
+  })
+
+  const memoryDir = path.join(Config.path.yunzai, 'data/agents-plugin/memories')
+  const memory = new MemoryStore({ dir: memoryDir })
+  const personaDir = path.join(Config.path.yunzai, 'data/agents-plugin/personas')
+  const personaStore = new PersonaStore({ dir: personaDir })
+  const K = getKv()
+  const session = new SessionStore({ kv: K })
+  const recall = new RecallStore({ kv: K })
+  const confirm = new ConfirmStore({ timeout: cfg.confirmTimeout || 300000 })
+  const scheduler = await nodeScheduleAdapter()
+  const schedule = new ScheduleStore({ kv: K, scheduler })
+  const persona = new PersonaService({ store: personaStore, kv: K })
+
+  // Skill（说明书 / 指令包）：从 skills/ 目录加载 .md/.js，按用户输入匹配后注入 prompt
+  const skills = new SkillRegistry()
+  const skillsDir = path.resolve(PLUGIN_ROOT, cfg.skill?.dir || 'skills')
+  const userSkills = await loadSkillPack(skillsDir, { logger: Log.tag('skill') })
+  for (const s of userSkills) {
+    try { skills.register(s) } catch (e) { Log.warn('[skill] 注册失败', s.name, e?.message || e) }
+  }
+
+  const tools = new ToolRegistry({ logger: Log.tag('tool') })
+    .register(webSearchTool)
+    .register(...noteTools({ kv: K }))
+    .register(clarifyTool)
+    .register(createMemoryTool(memory))
+    .register(makeRecallTool(recall)) // memory_search：模型主动检索长期记忆
+    .register(...makeMediaTools())
+
+  // 内置基础工具包：群信息 / 群管 / 米游社
+  if (cfg.tools?.builtin !== false) {
+    tools
+      .register(...groupInfoTools)
+      .register(...groupManageTools)
+      .register(...miyousheTools)
+  }
+
+  // 自定义工具包：扫描插件根 tools/ 目录自动加载（TRSS-Yunzai apps 风格）
+  const toolsDir = path.resolve(PLUGIN_ROOT, cfg.tools?.dir || 'tools')
+  const loaded = await loadToolPacks(toolsDir, { logger: Log.tag('toolkit') })
+  for (const t of loaded.tools) {
+    try { tools.register(t) } catch (e) { Log.warn('[toolkit] 注册失败', t.name, e?.message || e) }
+  }
+  if (loaded.packs.length) Log.info('[toolkit] 已加载工具包：', loaded.packs.map((p) => `${p.name}(${p.count})`).join(', '))
+
+  // 终端执行能力（危险，默认关；开启后每条命令在调度层强制主人确认 + 黑名单）
+  if (cfg.terminal?.enable) {
+    tools.register(makeTerminalTool())
+    Log.info('[terminal] 已启用终端执行工具（每条命令需主人 #确认）')
+  }
+
+  // skill 工具：模型主动调用 skill 的通道（按 name 加载说明书正文）—— 渐进式披露的载入入口
+  tools.register(makeSkillTool(skills))
+
+  // 技能热加载工具：安装 SkillHub 技能后免重启即可用
+  tools.register({
+    name: 'reload_skills',
+    description: '重新扫描技能目录(skills/)并加载新技能。用 skillhub/手动安装技能后调用，免去重启。',
+    category: 'system',
+    meta: { alwaysConfirm: true, interactive: true },
+    parameters: { type: 'object', properties: {} },
+    async execute() {
+      const fresh = await loadSkillPack(skillsDir, { logger: Log.tag('skill') })
+      skills.skills.clear()
+      skills.register(...fresh)
+      return { ok: true, count: skills.list().length, skills: skills.list().map((s) => s.name) }
+    },
+  })
+
+  const mcp = new McpManager({ registry: tools, logger: Log.tag('mcp'), requestTimeout: cfg.mcp?.requestTimeout })
+  mcp.start(cfg.mcp?.servers || {}).catch((e) => Log.error('[mcp] 启动失败', e?.message || e))
+
+  const agent = new Agent({
+    provider,
+    model: cfg.model,
+    tools,
+    memory,
+    session,
+    recall,
+    skills, // 让 Agent 在 system prompt 注入 <available_skills> 目录
+    guard: { checkInput, systemHardening },
+    guardAction: cfg.guardAction || 'flag',
+    guardSensitivity: cfg.guardSensitivity || 'medium',
+    policy: createPolicy({ categoryMin: cfg.policy?.categoryMin }),
+    // 留空时由 Agent 用富默认身份（model/prompt TEMPLATES.agent.system）；人设经 run opts.systemPrompt 覆盖
+    systemPrompt: cfg.systemPrompt || undefined,
+    maxTurns: cfg.maxTurns ?? 50,
+    temperature: cfg.temperature,
+    maxTokens: cfg.maxTokens || null, // 控制输出长度（消除 Anthropic 硬编码 4096 / OpenAI 不发）
+    thinking: cfg.thinking || null,
+    // 上下文管理：token 压力阈值（从 contextWindow 派生）、工具结果上限、是否回灌 reasoning
+    contextPressureThreshold: cfg.contextPressureThreshold ?? (cfg.contextWindow ? Math.floor(cfg.contextWindow * 0.8) : null),
+    maxToolResultChars: cfg.maxToolResultChars ?? 4000,
+    keepReasoning: cfg.keepReasoning === true,
+    logger: Log.tag('agent'),
+  })
+
+  // 视觉子模型（A 方案）：主模型不支持视觉时，由它把图片转成文本描述喂给主模型
+  let vision = null
+  if (cfg.vision?.enable !== false && cfg.vision?.model) {
+    try {
+      const vcfg = cfg.vision
+      const vProtocol = vcfg.protocol || protocol
+      const vPresetMap = vProtocol === 'anthropic' ? anthropicPresets : openaiPresets
+      const vPreset = vcfg.preset ? vPresetMap[vcfg.preset] : preset
+      const vProvider = createProvider({
+        protocol: vProtocol,
+        ...vPreset,
+        ...(vcfg.baseURL ? { baseURL: vcfg.baseURL } : {}),
+        apiKey: vcfg.apiKey || cfg.apiKey,
+        model: vcfg.model,
+      })
+      vision = new VisionService({
+        provider: vProvider,
+        model: vcfg.model,
+        protocol: vProtocol,
+        describePrompt: vcfg.describePrompt || undefined,
+        maxTokens: vcfg.maxTokens || 1024,
+        logger: Log.tag('vision'),
+      })
+    } catch (e) {
+      Log.warn('[vision] 视觉子模型装配失败，主模型不支持视觉时图片将降级', e?.message || e)
+    }
+  }
+
+  return { agent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, kv: K }
+}
+
+async function getRuntime() {
+  if (!_runtime) _runtime = await buildRuntime()
+  return _runtime
+}
+
+/** 失效运行时单例（下一次 getRuntime 用新配置重建） */
+function invalidateRuntime() {
+  _runtime = null
+}
+
+// 热加载：配置文件变更 → 失效运行时单例，下次对话用新配置重建（无需重启框架）
+Config.onChange(() => {
+  invalidateRuntime()
+  Log.info('[config] 配置已热加载，运行时将在下次对话重建')
+})
+
+// 供 apps/research.js 等复用已装配的 provider / 工具集
+export { getRuntime }
+
+function ctxOf(e) {
+  const isMaster = !!e.isMaster
+  let role = 'member'
+  if (e.member?.is_owner) role = 'owner'
+  else if (e.member?.is_admin) role = 'admin'
+  return {
+    role,
+    isMaster,
+    userId: String(e.user_id),
+    groupId: e.group_id ? String(e.group_id) : null,
+    isGroup: !!e.isGroup,
+    isGroupAdmin: !!(e.member?.is_admin || e.member?.is_owner),
+    notify: (id, info) => notifyMaster(e, id, info),
+    conversationId: null,
+    // 媒体被动工具（list_group_files/get_group_file/read_attachment）需读取实时事件与 Bot 句柄
+    e,
+    bot: (typeof Bot !== 'undefined' && Bot) || null,
+    fetcher: (typeof fetch !== 'undefined' && fetch) || null,
+  }
+}
+
+function notifyMaster(e, id, info) {
+  const masters = Config.get().agent?.masters || []
+  let detail = JSON.stringify(info.args || {}).slice(0, 120)
+  let risk = ''
+  if (info.tool === 'terminal' && info.args?.command) {
+    detail = `\n$ ${info.args.command}`.slice(0, 500)
+    // 风险特征提示（写入/网络/提权/删除/安装）
+    const c = info.args.command
+    if (/\b(rm|mv|chmod|chown|mkfs|dd|shutdown|reboot|halt)\b|>\s*/i.test(c)) risk = ' ⚠️写入/破坏'
+    else if (/\b(curl|wget|ssh|scp|rsync|git\s+push|git\s+clone)\b|https?:\/\//i.test(c)) risk = ' 🌐网络'
+    else if (/\bsudo\b|\bsu\b/i.test(c)) risk = ' 🔐提权'
+    else if (/\b(install|pip|npm|apt|yum|brew)\b/i.test(c)) risk = ' 📦安装'
+  }
+  const text = `待审批 #${id}：${info.tool}${risk} ${detail}\n回复「#确认 ${id}」或「#拒绝 ${id}」`
+  try {
+    for (const mid of masters) {
+      const bot = (typeof Bot !== 'undefined' && Bot) || null
+      bot?.pickFriend?.(mid)?.sendMsg?.(text)
+    }
+    if (!masters.length && e.isGroup) e.reply('⚠️ 有动作待审批，但未配置 master 接收通知（agent.masters）')
+  } catch (err) {
+    Log.warn('notifyMaster 失败', err?.message || err)
+  }
+}
+
+async function fireReminder(info) {
+  try {
+    const bot = (typeof Bot !== 'undefined' && (Bot[info.selfId] || Bot)) || null
+    const text = `⏰ 提醒：${info.message}`
+    if (info.groupId && bot?.pickGroup) await bot.pickGroup(info.groupId).sendMsg(text)
+    else if (bot?.pickFriend) await bot.pickFriend(info.userId).sendMsg(text)
+  } catch (err) {
+    Log.warn('fireReminder 失败', err?.message || err)
+  }
+}
+
+export class Chat extends plugin {
+  constructor() {
+    super({
+      name: 'agents对话',
+      dsc: 'AI Agent 对话（多轮/工具/记忆/安全/审批/MCP）',
+      event: 'message',
+      priority: 9999,
+      rule: [
+        // —— 主人指令 ——
+        { reg: '^#启用mcp\\s+(.+)', fnc: 'enableMcp', permission: 'master' },
+        { reg: '^#停止mcp\\s+(.+)', fnc: 'disableMcp', permission: 'master' },
+        { reg: '^#模型切换\\s+(.+)', fnc: 'switchModel', permission: 'master' },
+        { reg: '^#确认\\s*(\\d+)', fnc: 'approve', permission: 'master' },
+        { reg: '^#拒绝\\s*(\\d+)', fnc: 'reject', permission: 'master' },
+        { reg: '^#待确认$', fnc: 'pending', permission: 'master' },
+        { reg: '^#mcp$', fnc: 'mcpStatus', permission: 'master' },
+        { reg: '^#agents重载$', fnc: 'agentsReload', permission: 'master' },
+        { reg: '^#agents更新$', fnc: 'agentsUpdate', permission: 'master' },
+        // —— 所有用户 ——
+        { reg: '^#聊天列表$', fnc: 'chatList' },
+        { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
+        { reg: '^#new$', fnc: 'newChat' },
+        { reg: '^#记忆$', fnc: 'showMemory' },
+        { reg: '^#忘掉\\s+(.+)', fnc: 'forget' },
+        { reg: '^#我的提醒$', fnc: 'myReminders' },
+        { reg: '^#取消提醒\\s*(\\d+)', fnc: 'cancelReminder' },
+        // —— 人设 ——（更具体的规则在前，避免被 #人设+id 吞掉）
+        { reg: '^#人设列表$', fnc: 'personaList' },
+        { reg: '^#人设详情\\s+(.+)', fnc: 'personaDetail' },
+        { reg: '^#新建人设\\s+(.+)', fnc: 'personaCreate' },
+        { reg: '^#删除人设\\s+(.+)', fnc: 'personaDelete' },
+        { reg: '^#重置人设$', fnc: 'personaReset' },
+        { reg: '^#人设$', fnc: 'personaList' },
+        { reg: '^#人设\\s+(.+)', fnc: 'personaSwitch' },
+        // —— AI 触发（catch-all，最后匹配；@或自定义触发词）——
+        { reg: '^[\\s\\S]+$', fnc: 'onTrigger', log: false },
+      ],
+    })
+    getRuntime()
+      .then((rt) => rt.schedule.restore(fireReminder).catch(() => {}))
+      .catch((e) => Log.error('agent 初始化失败', e?.message || e))
+  }
+
+  // —— AI 触发 ——
+  async onTrigger() {
+    const cfg = Config.get().agent || {}
+    const mode = cfg.trigger || 'at' // at | command | both
+    const cmd = cfg.triggerCommand || '#ai'
+    const text = (this.e.msg || '').trim()
+    const atMode = mode !== 'command'
+    const cmdMode = mode !== 'at'
+    const isAt = !!this.e.atBot
+    const cmdRe = new RegExp(`^${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`)
+    const isCmd = cmdMode && cmdRe.test(text)
+    if (!((atMode && isAt && text) || isCmd)) return false
+    const input = isCmd ? text.replace(cmdRe, '').trim() : text
+    if (!input) return false
+    Log.mark('[trigger]', `user=${this.e.user_id} gid=${this.e.group_id || '-'} mode=${isCmd ? 'cmd' : 'at'} inputLen=${input.length}`)
+    return this._handleAgent(input)
+  }
+
+  async _handleAgent(text) {
+    let rt
+    try {
+      rt = await getRuntime()
+    } catch (e) {
+      await this.e.reply(String(e?.message || e))
+      return true
+    }
+    const cfg = Config.get().agent || {}
+    const ctx = ctxOf(this.e)
+    ctx.conversationId = await rt.session.getActiveConversation(ctx.userId)
+
+    // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
+    const protocol = cfg.protocol || 'openai'
+    const caps = detectCapabilities({ protocol, model: cfg.model, caps: cfg.media?.caps })
+    const mediaCfg = cfg.media || {}
+    ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2 }
+    // terminal 工具运行时配置（黑名单/超时/工作目录）
+    ctx.terminal = {
+      cwd: Config.path.yunzai,
+      maxTimeout: cfg.terminal?.maxTimeout || 600,
+      blocklist: cfg.terminal?.blocklist || DEFAULT_BLOCKLIST,
+    }
+    const media = createMediaService({ bot: ctx.bot, e: this.e, caps, protocol, config: mediaCfg, fetcher: ctx.fetcher })
+    let input = text
+    try {
+      let files = await media.collectActive()
+      const nImg = files.filter((f) => f.kind === 'image' || (f.mime || '').startsWith('image/')).length
+      // A 方案：主模型不支持视觉时，由视觉子模型把图片转成文本描述，再喂给主模型
+      if (!caps.vision && rt.vision && nImg > 0) {
+        Log.mark('[chat]', `vision 子模型识别 ${nImg} 张图（主模型 ${cfg.model} 无视觉）`)
+        try {
+          files = await describeImages(rt.vision, files, text)
+          media.replaceActive(files)
+        } catch (e) {
+          Log.warn('[vision] 图片识别失败，按原能力降级', e?.message || e)
+        }
+      }
+      ctx.media = files // 供 read_attachment 等被动工具读取
+      const content = media.buildContent(text)
+      if (Array.isArray(content)) input = { role: 'user', content, _media: true }
+      if (files.length) Log.debug('[chat]', `media files=${files.length} images=${nImg} vision=${!!caps.vision} multimodal=${Array.isArray(content)}`)
+    } catch (e) {
+      Log.warn('[media] 主动收集失败，回退纯文本', e?.message || e)
+    }
+
+    // —— 人设：解析当前用户激活的人设，覆盖身份层 systemPrompt ——
+    let systemPrompt
+    let personaId = null
+    try {
+      const { persona } = await rt.persona.resolve(ctx.userId)
+      systemPrompt = persona?.systemPrompt || undefined
+      personaId = persona?.id || null
+    } catch (e) {
+      Log.warn('[persona] 解析失败，用默认', e?.message || e)
+    }
+
+    // —— 情境感知：perception（数据：时间/角色/自我状态/近期对话）+ skill（说明书，按输入匹配）——
+    let context
+    try {
+      const perception = await buildSituationalContext({
+        ctx, runtime: rt, e: this.e, kv: rt.kv, cfg, bot: ctx.bot,
+        historyCount: cfg.skill?.historyCount ?? 15,
+      })
+      const matched = rt.skills.match({ input: text, ctx })
+      const skillText = rt.skills.assemble(matched)
+      if (matched.length) Log.mark('[skill]', '命中说明书：', matched.map((s) => s.name).join(','))
+      context = [perception, skillText].filter(Boolean).join('\n\n') || undefined
+    } catch (e) {
+      Log.warn('[perception/skill] 注入失败', e?.message || e)
+    }
+
+    Log.mark('[chat]', `user=${ctx.userId} gid=${ctx.groupId || '-'} conv=${ctx.conversationId} model=${cfg.model} persona=${personaId || 'default'} vision=${caps.vision ? 'on' : 'off'}${context ? ` ctx=${String(context).length}字` : ''}`)
+    const wantProgress = cfg.progress !== false
+    const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
+    if (wantProgress) await this.e.reply('思考中…')
+    const rs = makeReplyStream(this.e, { progress: wantProgress })
+    try {
+      const { content, stopReason, turns, usage } = await rt.agent.run(input, {
+        ctx, systemPrompt, context,
+        stream: wantStream,
+        ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
+      })
+      const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? '-'}` : '-'
+      Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
+      const suffix = stopReason === 'max_turns' ? '\n（已达工具调用上限）' : ''
+      await this.e.reply(`${content || '(无回复)'}${suffix}`)
+      // 记录群内最近活跃时间，供 perception 判断"久未发言补课"
+      if (ctx.isGroup && ctx.groupId && rt.kv) {
+        rt.kv.set(`perception:last_active:${ctx.groupId}`, { at: Date.now() }).catch(() => {})
+      }
+    } catch (e) {
+      Log.error('[chat] agent 失败', e?.message || e)
+      await this.e.reply(`失败：${e?.message || e}`)
+    }
+    return true
+  }
+
+  // —— 多对话 ——
+  async chatList() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const list = await rt.session.listConversations(ctx.userId)
+    const activeId = await rt.session.getActiveConversation(ctx.userId)
+    const html = buildChatListHtml({ user: ctx.userId, conversations: list, activeId })
+    const img = await screenshot('agents-plugin/chat-list', html)
+    if (img) return this.e.reply(img), true
+    const lines = list.map((c) => `#${c.id} ${c.title}（${c.count}条）${c.id === activeId ? ' [当前]' : ''}`)
+    await this.e.reply(['聊天列表', ...lines].join('\n'))
+    return true
+  }
+
+  async enterChat() {
+    const id = this.e.msg.match(/\d+/)?.[0]
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const ok = await rt.session.setActiveConversation(ctx.userId, id)
+    await this.e.reply(ok ? `已切换到对话 #${id}` : `未找到对话 #${id}，发送 #聊天列表 查看`)
+    return true
+  }
+
+  async newChat() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const conv = await rt.session.createConversation(ctx.userId)
+    await this.e.reply(`已新建对话 #${conv.id}（${conv.title}），后续消息在此对话中继续`)
+    return true
+  }
+
+  // —— 模型切换 ——
+  async switchModel() {
+    const id = this.e.msg.replace(/^#模型切换\s+/, '').trim()
+    const rt = await getRuntime()
+    rt.agent.model = id
+    try {
+      const c = Config.get()
+      if (!c.agent) c.agent = {}
+      c.agent.model = id
+      Config.save()
+    } catch (e) {
+      Log.warn('模型切换持久化失败', e?.message || e)
+    }
+    await this.e.reply(`已切换模型：${id}`)
+    return true
+  }
+
+  // —— MCP 启停 ——
+  async enableMcp() {
+    const name = this.e.msg.replace(/^#启用mcp\s+/, '').trim()
+    const rt = await getRuntime()
+    const cfg = Config.get().agent?.mcp?.servers?.[name]
+    if (!cfg) return this.e.reply(`未在配置中找到 MCP 服务端：${name}`), true
+    await rt.mcp.add(name, cfg)
+    const s = rt.mcp.status()[name]
+    await this.e.reply(s?.status === 'connected' ? `已启用 ${name}（${s.tools} 个工具）` : `启用 ${name} 失败：${s?.error || ''}`)
+    return true
+  }
+
+  async disableMcp() {
+    const name = this.e.msg.replace(/^#停止mcp\s+/, '').trim()
+    const rt = await getRuntime()
+    await rt.mcp.remove(name)
+    await this.e.reply(`已停止 ${name}`)
+    return true
+  }
+
+  async mcpStatus() {
+    const rt = await getRuntime()
+    const status = rt.mcp.status()
+    const names = Object.keys(status)
+    if (!names.length) return this.e.reply('未配置 MCP 服务端'), true
+    const lines = names.map((n) => {
+      const s = status[n]
+      return `${s.status === 'connected' ? '✅' : s.status === 'error' ? '❌' : '⏳'} ${n}：${s.tools} 工具${s.error ? `（${s.error}）` : ''}`
+    })
+    await this.e.reply(lines.join('\n'))
+    return true
+  }
+
+  // —— 配置热重载（立即重建运行时：provider/model/tools/skills/mcp）——
+  async agentsReload() {
+    try {
+      Config.reload()
+      invalidateRuntime()
+      await getRuntime()
+      await this.e.reply('✅ 已重载配置并重建运行时（model / tools / skills / mcp）')
+    } catch (e) {
+      Log.error('[reload] 重载失败', e?.message || e)
+      await this.e.reply(`重载失败：${e?.message || e}`)
+    }
+    return true
+  }
+
+  // —— 更新插件：git pull 拉取最新代码 + 热加载（仅 master）——
+  async agentsUpdate() {
+    const dir = Config.path.plugin
+    try {
+      try {
+        await pexec('git rev-parse --is-inside-work-tree', { cwd: dir })
+      } catch {
+        await this.e.reply('⚠️ 当前插件目录不是 git 仓库，无法自动更新（请用 git clone 安装本插件）。')
+        return true
+      }
+      await this.e.reply('⏳ 正在拉取最新代码…')
+      let out
+      try {
+        // GIT_TERMINAL_PROMPT=0 防止凭证/合并提示挂起；--no-edit 自动完成合并提交
+        const r = await pexec('git pull --no-edit', {
+          cwd: dir,
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+          maxBuffer: 4 * 1024 * 1024,
+        })
+        out = `${r.stdout || ''}${r.stderr ? '\n' + r.stderr : ''}`
+      } catch (e) {
+        const msg = `${e.stdout || ''}${e.stderr || ''}${e.message || ''}`
+        await this.e.reply(`❌ 更新失败（可能有未提交的本地改动或冲突）：\n${String(msg).slice(0, 800)}`)
+        return true
+      }
+      const text = String(out).trim()
+      // 拉取后热加载：配置/技能等数据级改动立即生效；JS 代码改动需重启 Yunzai
+      try { Config.reload(); invalidateRuntime() } catch { /* noop */ }
+      const upToDate = /Already up to date|已经是最新/i.test(text)
+      const head = upToDate
+        ? '✅ 当前已是最新版本。'
+        : '✅ 已拉取最新代码。配置/技能等数据级改动已热加载；**JS 代码改动需重启 Yunzai 生效**。'
+      await this.e.reply(`${head}\n\n${text.slice(0, 800)}`.trim())
+    } catch (e) {
+      Log.error('[update] 更新失败', e?.message || e)
+      await this.e.reply(`更新失败：${e?.message || e}`)
+    }
+    return true
+  }
+
+  // —— 审批 ——
+  async approve() {
+    const id = this.e.msg.match(/\d+/)?.[0]
+    const rt = await getRuntime()
+    await this.e.reply(rt.confirm.resolve(id, true) ? `已批准 #${id}` : `未找到待审 #${id}`)
+    return true
+  }
+
+  async reject() {
+    const id = this.e.msg.match(/\d+/)?.[0]
+    const rt = await getRuntime()
+    await this.e.reply(rt.confirm.resolve(id, false) ? `已拒绝 #${id}` : `未找到待审 #${id}`)
+    return true
+  }
+
+  async pending() {
+    const rt = await getRuntime()
+    const list = rt.confirm.list()
+    if (!list.length) return this.e.reply('当前无待审批'), true
+    const lines = list.map((p) => `#${p.id} ${p.tool} ${JSON.stringify(p.args || {}).slice(0, 80)}`)
+    await this.e.reply(lines.join('\n'))
+    return true
+  }
+
+  // —— 记忆 / 提醒 ——
+  async showMemory() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const list = await rt.recall.listByUser(ctx.userId)
+    const text = list.length ? rt.recall.formatForPrompt(list.slice(0, 20)) : rt.memory.snapshotAll()
+    await this.e.reply((text || '(记忆为空)').slice(0, 4000))
+    return true
+  }
+
+  async forget() {
+    const kw = this.e.msg.replace(/^#忘掉\s+/, '').trim()
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const n = await rt.recall.forget(ctx.userId, kw)
+    await this.e.reply(n ? `已遗忘 ${n} 条含「${kw}」的记忆` : `未找到含「${kw}」的记忆`)
+    return true
+  }
+
+  async myReminders() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const list = await rt.schedule.listByUser(ctx.userId)
+    if (!list.length) return this.e.reply('暂无提醒'), true
+    const lines = list.map((r) => `#${r.id} ${new Date(r.at).toLocaleString()}：${r.message}`)
+    await this.e.reply(lines.join('\n'))
+    return true
+  }
+
+  async cancelReminder() {
+    const id = this.e.msg.match(/\d+/)?.[0]
+    const rt = await getRuntime()
+    await rt.schedule.cancel(id)
+    await this.e.reply(`已取消提醒 #${id}`)
+    return true
+  }
+
+  // —— 人设 ——
+  async personaList() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const personas = rt.personaStore.list()
+    const activeId = await rt.persona.getActiveId(ctx.userId)
+    const html = buildPersonaListHtml({ user: ctx.userId, personas, activeId })
+    const img = await screenshot('agents-plugin/persona-list', html)
+    if (img) return this.e.reply(img), true
+    const lines = personas.map((p) => `${p.id === activeId ? '★' : '·'} #${p.id} ${p.name}${p.builtin ? '（内置）' : ''} — ${p.description}`)
+    await this.e.reply(['人设列表（#人设 + id 切换）', ...lines].join('\n'))
+    return true
+  }
+
+  async personaSwitch() {
+    const idOrName = this.e.msg.replace(/^#人设\s+/, '').trim()
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    try {
+      const p = await rt.persona.setActive(ctx.userId, idOrName)
+      await this.e.reply(`已切换人设：${p.name}${p.greeting ? `\n${p.greeting}` : ''}`)
+    } catch (e) {
+      await this.e.reply(e?.message || '切换失败，发送 #人设 查看列表')
+    }
+    return true
+  }
+
+  async personaDetail() {
+    const idOrName = this.e.msg.replace(/^#人设详情\s+/, '').trim()
+    const rt = await getRuntime()
+    const p = rt.personaStore.get(idOrName)
+    if (!p) return this.e.reply(`未找到人设「${idOrName}」`), true
+    const tags = p.tags?.length ? ` | 标签：${p.tags.join('、')}` : ''
+    await this.e.reply([
+      `#${p.id} ${p.name}${p.builtin ? '（内置）' : '（自定义）'}${tags}`,
+      p.description,
+      '—— 人设内容 ——',
+      p.systemPrompt,
+    ].join('\n'))
+    return true
+  }
+
+  async personaCreate() {
+    const rest = this.e.msg.replace(/^#新建人设\s+/, '').trim()
+    const sp = rest.indexOf(' ')
+    if (sp < 0) return this.e.reply('格式：#新建人设 <名称> <人设内容>（名称与内容用空格分隔）'), true
+    const name = rest.slice(0, sp).trim()
+    const systemPrompt = rest.slice(sp + 1).trim()
+    if (!name || systemPrompt.length < 2) return this.e.reply('名称或人设内容过短'), true
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    try {
+      const p = rt.personaStore.add({ name, systemPrompt }, { creator: ctx.userId })
+      await rt.persona.setActive(ctx.userId, p.id)
+      await this.e.reply(`已创建并切换到人设：${p.name}（#${p.id}）`)
+    } catch (e) {
+      await this.e.reply(e?.message || '创建失败')
+    }
+    return true
+  }
+
+  async personaDelete() {
+    const idOrName = this.e.msg.replace(/^#删除人设\s+/, '').trim()
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    const p = rt.personaStore.get(idOrName)
+    if (!p) return this.e.reply(`未找到人设「${idOrName}」`), true
+    if (p.builtin) return this.e.reply(`内置人设「${p.name}」不可删除`), true
+    // 仅创建者或 master 可删
+    if (p.creator && p.creator !== ctx.userId && !ctx.isMaster) {
+      return this.e.reply('仅人设创建者或主人可删除'), true
+    }
+    rt.personaStore.remove(p.id)
+    await rt.persona.resetActive(ctx.userId)
+    await this.e.reply(`已删除人设：${p.name}（#${p.id}）`)
+    return true
+  }
+
+  async personaReset() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    await rt.persona.resetActive(ctx.userId)
+    await this.e.reply('已恢复默认人设')
+    return true
+  }
+}
