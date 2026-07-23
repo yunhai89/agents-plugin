@@ -36,10 +36,11 @@ import { listGroupFilesTool, getGroupFileTool, readAttachmentTool, makeMediaTool
  *   - protocol: 'openai' | 'anthropic'
  *   - config: { maxImages, maxFileBytes, degrade, active, passive }
  */
-export function createMediaService({ bot = null, e = null, caps = {}, protocol = 'openai', config = {}, fetcher } = {}) {
+export function createMediaService({ bot = null, e = null, caps = {}, protocol = 'openai', config = {}, fetcher, log } = {}) {
   const maxImages = config.maxImages ?? 4
   const maxFileBytes = config.maxFileBytes ?? 8 * 1024 * 1024
   const degrade = config.degrade || 'note'
+  const debug = typeof log === 'function' ? log : null
 
   let active = []
 
@@ -47,8 +48,14 @@ export function createMediaService({ bot = null, e = null, caps = {}, protocol =
   async function collectActive() {
     let list = []
     if (config.active !== false) {
-      try { list = await collectFromEvent(e, { bot }) } catch { list = [] }
-      await resolveAll(list, { bot, fetcher })
+      try {
+        list = await collectFromEvent(e, { bot, log: debug })
+      } catch (err) {
+        debug?.(`collectFromEvent 异常: ${err?.message || err}`)
+        list = []
+      }
+      // 解析字节：e 透传给 resolve，使 NapCat/OneBot 原生接口兜底可用（引用/历史/群文件）
+      await resolveAll(list, { bot, fetcher, e, log: debug })
       // 应用上限：先保证图片在视觉模型下入参，超限/超大按 degrade 处理
       list = applyLimits(list, { maxImages, maxFileBytes, caps })
     }

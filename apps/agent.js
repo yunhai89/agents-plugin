@@ -444,7 +444,10 @@ export class Chat extends plugin {
       maxTimeout: cfg.terminal?.maxTimeout || 600,
       blocklist: cfg.terminal?.blocklist || DEFAULT_BLOCKLIST,
     }
-    const media = createMediaService({ bot: ctx.bot, e: this.e, caps, protocol, config: mediaCfg, fetcher: ctx.fetcher })
+    const media = createMediaService({
+      bot: ctx.bot, e: this.e, caps, protocol, config: mediaCfg, fetcher: ctx.fetcher,
+      log: (m) => (/失败|未能|异常/.test(m) ? Log.warn('[media]', m) : Log.debug('[media]', m)),
+    })
     let input = text
     try {
       let files = await media.collectActive()

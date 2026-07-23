@@ -4,7 +4,16 @@
  * 框架优先：Bot.download(url) → {buffer}；Bot.fileType({file}) → {type:{mime,ext}}。
  * 兜底自实现：无 Bot 时用 fetcher(node-fetch) 取字节 + inferMime 魔数嗅探（零依赖）。
  * 链接发现：url 缺失时尝试 getFileUrl/fs.download（群文件场景）。
+ *
+ * NapCat/OneBot 直连兜底（关键）：引用消息、历史消息里的图片/文件经 get_msg 取到时往往
+ * 没有 url（或已过期，见 napcat 文档 §13.7），群文件段只有 file_id。此时若拿到事件 e，
+ * 直接调 OneBot 原生接口取字节：
+ *   - get_file(file_id) → 返回 base64 / url（文件类，最稳，base64 不依赖共享文件系统）
+ *   - get_image(file)   → 返回本地路径或 url（图片）
+ *   - get_record(file)  → 返回语音路径（audio）
  */
+
+import fs from 'node:fs'
 
 const EXT_MIME = {
   png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
@@ -114,6 +123,54 @@ async function toBuffer(source, { bot, fetcher }) {
       return Buffer.from(await res.arrayBuffer())
     }
   }
+  // 本地路径（get_image/get_file/get_record 返回的 NapCat 本地路径；同机部署可直接读）
+  const localPath = source.startsWith('file://') ? source.slice(7) : source
+  if (source.startsWith('file://') || /^([\/~]|[a-zA-Z]:[\\/])/.test(source)) {
+    try { return fs.readFileSync(localPath) } catch { /* noop */ }
+  }
+  return null
+}
+
+/** 从 OneBot sendApi 的（可能被 Proxy 包装的）返回里取字段 */
+function pickField(r, ...keys) {
+  if (!r) return null
+  for (const k of keys) {
+    const v = r[k] ?? r?.data?.[k]
+    if (v) return v
+  }
+  return null
+}
+
+/**
+ * NapCat/OneBot 原生接口取字节（引用/历史/群文件场景，url 缺失或下载失败时的兜底）。
+ * 需要 e.bot.sendApi；调用方无 e 时直接返回 null。
+ */
+async function napcatBytes(mf, e, { bot, fetcher, log }) {
+  const sendApi = e?.bot?.sendApi
+  if (typeof sendApi !== 'function') return null
+  const seg = mf.segment || {}
+  try {
+    // 文件类（file_id）→ get_file 返回 base64 / url（base64 不依赖共享文件系统，最稳）
+    const fileId = seg.file_id || mf.fid
+    if (fileId) {
+      const r = await sendApi('get_file', { file_id: fileId })
+      const b64 = pickField(r, 'base64')
+      if (b64) return Buffer.from(b64, 'base64')
+      const url = pickField(r, 'url')
+      if (url) { const b = await toBuffer(url, { bot, fetcher }); if (b) return b }
+    }
+    // 图片/语音（file 文件名）→ get_image / get_record 返回本地路径或 url
+    const file = seg.file
+    if (file) {
+      const action = mf.kind === 'audio' ? 'get_record' : 'get_image'
+      const params = action === 'get_record' ? { file, out_format: 'mp3' } : { file }
+      const r = await sendApi(action, params)
+      const target = pickField(r, 'url', 'file')
+      if (target) { const b = await toBuffer(target, { bot, fetcher }); if (b) return b }
+    }
+  } catch (err) {
+    log?.(`napcat 取字节失败(${mf.kind}/${mf.source}): ${err?.message || err}`)
+  }
   return null
 }
 
@@ -121,7 +178,7 @@ async function toBuffer(source, { bot, fetcher }) {
  * 解析单个 MediaFile：补全 url（群文件）→ 下载字节 → 推断 mime/ext。
  * 失败不抛错，置 resolveError，交由上层决定降级或跳过。
  */
-export async function resolveMedia(mf, { bot, fetcher } = {}) {
+export async function resolveMedia(mf, { bot, fetcher, e, log } = {}) {
   if (!mf) return mf
   if (mf.buffer) { // 已解析
     if (!mf.mime) Object.assign(mf, inferMime(mf.name, mf.buffer))
@@ -151,9 +208,14 @@ export async function resolveMedia(mf, { bot, fetcher } = {}) {
   if (!buffer && mf.segment?.file && typeof mf.segment.file === 'string') {
     try { buffer = await toBuffer(mf.segment.file, { bot, fetcher }) } catch { /* noop */ }
   }
+  // NapCat/OneBot 原生接口兜底：引用/历史/群文件 url 缺失或失效时，用 get_file/get_image/get_record 取字节
+  if (!buffer && e) {
+    try { buffer = await napcatBytes(mf, e, { bot, fetcher, log }) } catch { /* noop */ }
+  }
 
   if (!buffer) {
     mf.resolveError = mf.url ? 'download_failed' : 'no_url'
+    log?.(`取字节失败(${mf.kind}/${mf.source} ${mf.name}): ${mf.resolveError}`)
     return mf
   }
 
