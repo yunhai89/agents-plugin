@@ -261,6 +261,28 @@ mcp:
       enabled: true
 ```
 
+> **⚠️ Docker / 精简镜像没有 `npx`？—— MCP 握手超时（ENOENT）**
+>
+> 部分 Yunzai Docker 镜像只装了 `node`、**没有 `npm`/`npx`/`corepack`**（某些 `trss`/`miao` 镜像即如此）。此时上面 `command: "npx"` 会启动失败：
+> ```
+> [mcp] xxx 连接失败：传输关闭（进程退出码-2；spawn 失败：ENOENT spawn npx（npx 不在 PATH？…））
+> ```
+> （旧版本这种情况只甩一句看不懂的 `request timeout: initialize`；现已**立即**报出 ENOENT + 退出码 + stderr 末尾，便于定位。）
+>
+> **判断**：`docker exec <容器> command -v npx` —— 输出为空就是容器里没装 npx。
+>
+> **解决方案（任选其一，推荐 ①）**：
+>
+> 1. **给容器补上 npm/npx（一次性脚本，推荐）**：仓库自带 [`scripts/bootstrap-npm-docker.sh`](scripts/bootstrap-npm-docker.sh)，纯 `node + curl + tar` 实现、不依赖包管理器：
+>    ```bash
+>    docker cp plugins/agents-plugin/scripts/bootstrap-npm-docker.sh <容器>:/tmp/bs.sh
+>    docker exec <容器> sh /tmp/bs.sh
+>    # 装好后 npx 进入容器 PATH，上面 MCP 配置无需任何改动
+>    ```
+>    ⚠️ 脚本装在「运行中的容器」里，**容器一旦重建（重新 `docker run`）会丢失**，需重跑；想一劳永逸请把它加进镜像 entrypoint / Dockerfile。
+> 2. **改用绝对路径**：若容器别处有 `npx`/`node`，把 `command` 换成绝对路径（如 `/usr/local/bin/npx`）。
+> 3. **绕开 npx**：容器内 `npm i -g <mcp包>` 全局安装后，用 `command: "/usr/bin/node"` + `args: ["<全局模块入口 js 的绝对路径>"]` 直接跑；或改用 `transport: "http"` 连远程 MCP，本地无需任何进程。
+
 ---
 
 ## 🎮 指令
@@ -437,6 +459,8 @@ utils/       Config 配置读写（插件目录 + 热加载） · Log 分级日�
 ## 🔧 日志与排查
 
 分级日志（`utils/Log.js`）：`mark`（里程碑）/ `info`（研究进度）/ `debug`（工具入参·每轮 token）/ `warn` / `error`。开启 `debug: true` 可看到 AI 每次调用工具的名称、入参、结果与每轮 token 用量，深度研究的迭代轮次与搜索词，便于排查。
+
+**MCP 连不上时先看报错措辞**：`request timeout: initialize` = 服务端进程起来了但没在超时内响应握手（npx 首次下载慢 / 网络不通 / 命令错误）；`ENOENT spawn npx` / `进程退出码-2` = 容器里压根没有 npx（精简 Docker 镜像常见）—— 解决方案见上文 `agent.mcp` 章节的 ⚠️ 说明；`进程退出码 N` + stderr = 服务端启动即崩溃（缺 API Key / 依赖 / Node 版本，看 stderr 末尾）。
 
 ---
 
