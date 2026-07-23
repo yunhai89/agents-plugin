@@ -156,9 +156,9 @@ export function supportGuoba() {
         { field: 'agent.mcp.requestTimeout', label: '请求超时(毫秒)', component: 'InputNumber', componentProps: { min: 1000, step: 1000 } },
         {
           field: 'agent.mcp.serversJson',
-          label: 'MCP 服务端（mcpServers JSON）',
-          helpMessage: '直接粘贴标准 mcpServers JSON（支持 Claude Desktop 格式 { "mcpServers": {...} }），框架自动解析。保存即热加载。',
-          bottomHelpMessage: '示例：\n{\n  "mcpServers": {\n    "moegirl": { "command": "npx", "args": ["-y", "moegirl-wiki-mcp"] },\n    "remote": { "type": "http", "url": "https://x.com/mcp" }\n  }\n}\n\nstdio：command/args/env；http：type/url/headers。可同时配多个。Docker 精简镜像无 npx 见 README「agent.mcp」排查。',
+          label: 'MCP 服务端（粘贴新增 · 自动合并）',
+          helpMessage: '粘贴标准 mcpServers JSON（如 { "mcpServers": { "名字": { "command":"npx", "args":[...] } } }），保存时自动合并：新服务加入、同名更新、其它已有服务一律保留。可反复粘贴累积多个。删除某个服务用聊天指令 #停止mcp <名字>。',
+          bottomHelpMessage: '示例（粘一个就加一个，互不覆盖）：\n{\n  "mcpServers": {\n    "moegirl": { "command": "npx", "args": ["-y", "moegirl-wiki-mcp"] }\n  }\n}\n\nstdio：command/args/env；http：type/url/headers。框里默认显示你现有的全部服务，可直接增删键。Docker 精简镜像无 npx 见 README「agent.mcp」排查。',
           component: 'InputTextArea',
           componentProps: { placeholder: '{\n  "mcpServers": {\n    "xxx": { "command": "npx", "args": ["-y", "xxx"] }\n  }\n}', autosize: { minRows: 8, maxRows: 24 } },
         },
@@ -203,16 +203,27 @@ export function supportGuoba() {
           delete data['agent.thinking.enable']
           delete data['agent.thinking.budget_tokens']
         }
-        // MCP servers：面板 mcpServers JSON 文本 → 对象 map（写回 config.agent.mcp.servers）
-        // 支持 { "mcpServers": {...} } 标准包装 或 裸 { name: cfg }；解析失败则保留原配置并提示
+        // MCP servers：面板 mcpServers JSON → 合并进现有 servers（新键加入/同名更新，其它保留）。
+        // 支持 { "mcpServers": {...} } 标准包装 或 裸 { name: cfg }；解析失败则保留原配置并提示。
+        // 这样「粘一个加一个」可累积多个服务，不会覆盖已配置的。
         if ('agent.mcp.serversJson' in (data || {})) {
           const raw = String(data['agent.mcp.serversJson'] || '').trim()
           try {
-            const servers = raw ? unwrapServers(JSON.parse(raw)) : {}
-            if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
-              cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
-            } else {
-              throw new Error('需为 { "mcpServers": {...} } 对象')
+            if (raw) {
+              const incoming = unwrapServers(JSON.parse(raw))
+              if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+                throw new Error('需为 { "mcpServers": {...} } 对象')
+              }
+              const existing = cfg.agent?.mcp?.servers || {}
+              const merged = { ...existing }
+              let added = 0
+              for (const [k, v] of Object.entries(incoming)) {
+                if (!k) continue
+                if (!(k in merged)) added++
+                merged[k] = v
+              }
+              cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers: merged }
+              notes.push(`MCP 已合并：新增 ${added} 个，当前共 ${Object.keys(merged).length} 个（删除某服务用 #停止mcp）`)
             }
           } catch (e) {
             Log.warn('[guoba] MCP serversJson 解析失败，已保留原配置', e?.message || e)
