@@ -13,7 +13,6 @@
  */
 import Config from './utils/Config.js'
 import Log from './utils/Log.js'
-import yaml from 'yaml'
 
 /** 按点路径写入嵌套对象（不引 lodash） */
 function setPath(obj, path, value) {
@@ -30,6 +29,57 @@ function setPath(obj, path, value) {
 /** 解包 { mcpServers: {...} }（用户常贴 Claude Desktop 标准包装） */
 function unwrapServers(s) {
   return s && typeof s === 'object' && s.mcpServers ? s.mcpServers : s
+}
+
+/** servers 对象(map) → 面板数组：每项一个服务（GSubForm multiple 展示/编辑） */
+function serversMapToList(servers) {
+  const s = unwrapServers(servers || {})
+  return Object.entries(s).map(([name, cfg]) => {
+    cfg = cfg || {}
+    const isHttp = cfg.type === 'http' || cfg.transport === 'http' || (!!cfg.url && !cfg.command)
+    return {
+      name,
+      type: isHttp ? 'http' : 'stdio',
+      enabled: cfg.enabled !== false,
+      command: cfg.command || '',
+      args: Array.isArray(cfg.args) ? cfg.args.join('\n') : (cfg.args || ''),
+      url: cfg.url || '',
+      env: cfg.env && typeof cfg.env === 'object' ? Object.entries(cfg.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
+      prefix: cfg.prefix != null ? String(cfg.prefix) : '',
+      category: cfg.category || '',
+    }
+  })
+}
+
+/** 面板数组 → servers 对象(map)，写回 config.agent.mcp.servers（无名条目跳过） */
+function serversListToMap(list) {
+  const out = {}
+  for (const item of (Array.isArray(list) ? list : [])) {
+    if (!item || !String(item.name || '').trim()) continue
+    const name = String(item.name).trim()
+    const cfg = {}
+    const http = item.type === 'http' || (!!item.url && !item.command)
+    cfg.type = http ? 'http' : 'stdio'
+    if (http) {
+      if (item.url) cfg.url = item.url
+    } else {
+      if (item.command) cfg.command = item.command
+      if (item.args) cfg.args = String(item.args).split('\n').map((x) => x.trim()).filter(Boolean)
+    }
+    if (item.env) {
+      const env = {}
+      for (const line of String(item.env).split('\n')) {
+        const t = line.trim(); if (!t) continue
+        const i = t.indexOf('='); if (i > 0) env[t.slice(0, i).trim()] = t.slice(i + 1)
+      }
+      if (Object.keys(env).length) cfg.env = env
+    }
+    if (item.prefix && String(item.prefix).trim()) cfg.prefix = String(item.prefix).trim()
+    if (item.category && String(item.category).trim()) cfg.category = String(item.category).trim()
+    if (item.enabled === false) cfg.enabled = false
+    out[name] = cfg
+  }
+  return out
 }
 
 // 常用选项集
@@ -155,7 +205,28 @@ export function supportGuoba() {
         // —— MCP ——
         { label: 'MCP 服务端', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.mcp.requestTimeout', label: '请求超时(毫秒)', component: 'InputNumber', componentProps: { min: 1000, step: 1000 } },
-        { field: 'agent.mcp.serversYaml', label: 'MCP 服务端配置（YAML）', helpMessage: '用 YAML 编辑 servers（stdio 子进程 / http 远程）。保存即热加载。', bottomHelpMessage: '示例：\nfs:\n  command: npx\n  args: ["-y","@modelcontextprotocol/server-filesystem","./"]\n  prefix: fs\n  category: query\nremote:\n  transport: http\n  url: https://example.com/mcp\n  prefix: rmt\n  enabled: true', component: 'InputTextArea', componentProps: { placeholder: 'fs:\n  command: npx\n  args: [...]\n  prefix: fs\n  category: query' } },
+        {
+          field: 'agent.mcp.serversList',
+          label: 'MCP 服务端列表',
+          helpMessage: '可添加多个 MCP 服务端（每个一张子表单，支持增删）。保存即热加载。也可用聊天指令 #添加mcp 粘贴标准 mcpServers JSON。',
+          bottomHelpMessage: 'stdio：填 command + args(每行一个) + env(每行 KEY=VALUE)；http：填 url。name 作工具前缀默认值。Docker 精简镜像无 npx 见 README「agent.mcp」排查。',
+          component: 'GSubForm',
+          componentProps: {
+            multiple: true,
+            modalProps: { title: 'MCP 服务端配置' },
+            schemas: [
+              { field: 'name', label: '名称(唯一)', bottomHelpMessage: '同时是工具命名空间前缀的默认值', component: 'Input', required: true },
+              { field: 'enabled', label: '启用', component: 'Switch' },
+              { field: 'type', label: '传输方式', component: 'Select', componentProps: { options: [{ label: 'stdio(本地子进程)', value: 'stdio' }, { label: 'http(远程)', value: 'http' }] } },
+              { field: 'command', label: 'command(stdio)', bottomHelpMessage: '如 npx；Docker 精简镜像无 npx 时用绝对路径', component: 'Input', componentProps: { placeholder: 'npx' } },
+              { field: 'args', label: 'args(stdio，每行一个)', component: 'InputTextArea', componentProps: { placeholder: '-y\n@modelcontextprotocol/server-filesystem\n./' } },
+              { field: 'url', label: 'url(http)', component: 'Input', componentProps: { placeholder: 'https://example.com/mcp' } },
+              { field: 'env', label: '环境变量(每行 KEY=VALUE)', component: 'InputTextArea', componentProps: { placeholder: 'Z_AI_API_KEY=xxx\nZ_AI_MODE=ZHIPU' } },
+              { field: 'prefix', label: '工具前缀', bottomHelpMessage: '留空=用名称', component: 'Input' },
+              { field: 'category', label: 'RBAC 类别', bottomHelpMessage: 'query(读,默认)/system(写,需审批)等，留空=query', component: 'Input' },
+            ],
+          },
+        },
 
         // —— ⚠️ 终端(高危) ——
         { label: '⚠️ 终端执行(高危)', component: 'SOFT_GROUP_BEGIN' },
@@ -176,10 +247,9 @@ export function supportGuoba() {
         // thinking：provider 原生 {type,budget_tokens}|null → 面板友好 {enable,budget_tokens}
         const tk = data?.agent?.thinking
         data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
-        // mcp.servers（对象）→ YAML 文本（serversYaml 虚拟字段，textarea 展示/编辑）
+        // mcp.servers（对象 map）→ 数组（serversList 虚拟字段，GSubForm multiple 展示/编辑）
         try {
-          const servers = unwrapServers(data?.agent?.mcp?.servers || {})
-          data.agent.mcp = { ...(data.agent?.mcp || {}), serversYaml: yaml.stringify(servers) || '' }
+          data.agent.mcp = { ...(data.agent?.mcp || {}), serversList: serversMapToList(data?.agent?.mcp?.servers || {}) }
           delete data.agent.mcp.servers
         } catch { /* noop */ }
         return data
@@ -196,16 +266,15 @@ export function supportGuoba() {
           delete data['agent.thinking.enable']
           delete data['agent.thinking.budget_tokens']
         }
-        // MCP servers：面板 YAML 文本 → 对象（用户可能贴 { mcpServers: {...} } 标准包装，解包）
-        if ('agent.mcp.serversYaml' in (data || {})) {
+        // MCP servers：面板数组（serversList）→ 对象 map（写回 config.agent.mcp.servers）
+        if ('agent.mcp.serversList' in (data || {})) {
           try {
-            let servers = yaml.parse(data['agent.mcp.serversYaml'] || '') || {}
-            servers = unwrapServers(servers)
+            const servers = serversListToMap(data['agent.mcp.serversList'])
             cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
-            delete data['agent.mcp.serversYaml']
+            delete data['agent.mcp.serversList']
           } catch (e) {
-            Log.warn('[guoba] MCP servers YAML 解析失败，已忽略', e?.message || e)
-            delete data['agent.mcp.serversYaml']
+            Log.warn('[guoba] MCP servers 解析失败，已忽略', e?.message || e)
+            delete data['agent.mcp.serversList']
           }
         }
         for (const [p, v] of Object.entries(data || {})) {
