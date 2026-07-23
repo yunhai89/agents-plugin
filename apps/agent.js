@@ -121,6 +121,7 @@ function makeReplyStream(e, { progress = true } = {}) {
  */
 
 let _runtime = null
+const _clearPending = new Map() // userId → 确认清空的时间戳（2 步确认）
 
 function getKv() {
   if (typeof globalThis !== 'undefined' && globalThis.redis) return redisKv(globalThis.redis)
@@ -383,6 +384,7 @@ export class Chat extends plugin {
         { reg: '^#忘掉\\s+(.+)', fnc: 'forget' },
         { reg: '^#我的提醒$', fnc: 'myReminders' },
         { reg: '^#取消提醒\\s*(\\d+)', fnc: 'cancelReminder' },
+        { reg: '^#清空所有记录$', fnc: 'clearMyData' },
         // —— 人设 ——（更具体的规则在前，避免被 #人设+id 吞掉）
         { reg: '^#人设列表$', fnc: 'personaList' },
         { reg: '^#人设详情\\s+(.+)', fnc: 'personaDetail' },
@@ -684,6 +686,60 @@ export class Chat extends plugin {
     await this.e.reply(`已取消提醒 #${id}`)
     return true
   }
+
+  // —— 清空自己的所有记录（不含配置文件；2 步确认）——
+  async clearMyData() {
+    const rt = await getRuntime()
+    const uid = String(this.e.user_id)
+    const now = Date.now()
+    const last = _clearPending.get(uid)
+    if (!last || now - last > 60000) {
+      _clearPending.set(uid, now)
+      await this.e.reply([
+        '⚠️ 确认清空你的所有记录？将删除：',
+        '· 全部对话历史',
+        '· 长期记忆（recall）',
+        '· 个人笔记',
+        '· 提醒',
+        '· 人设绑定（恢复默认）',
+        '',
+        '**不删除配置文件**。60 秒内再发一次「#清空所有记录」执行。',
+      ].join('\n'))
+      return true
+    }
+    _clearPending.delete(uid)
+    try {
+      const cleared = []
+      // 会话：扫描该用户名下的所有 session 键
+      const sessPrefix = 'Yz:agent:sess:'
+      let nSess = 0
+      for (const k of await rt.kv.scan(sessPrefix)) {
+        const tail = String(k).slice(sessPrefix.length)
+        const parts = tail.split(':')
+        const mine = parts[0] === 'conv'
+          ? (parts[1] === uid || ((parts[1] === 'active' || parts[1] === 'seq') && parts[2] === uid))
+          : (parts[parts.length - 1] === uid)
+        if (mine) { await rt.kv.del(k); nSess++ }
+      }
+      if (nSess) cleared.push(`对话历史(${nSess})`)
+      // 召回记忆
+      await rt.recall.clearAll(uid); cleared.push('长期记忆')
+      // 个人笔记
+      await rt.kv.del(`Yz:agent:note:${uid}`); cleared.push('笔记')
+      // 提醒
+      const rems = await rt.schedule.listByUser(uid)
+      for (const r of rems) await rt.schedule.cancel(r.id)
+      if (rems.length) cleared.push(`提醒(${rems.length})`)
+      // 人设绑定
+      await rt.persona.resetActive(uid); cleared.push('人设绑定')
+      await this.e.reply('✅ 已清空你的所有记录：' + cleared.join('、') + '\n（配置文件未动；MEMORY.md/USER.md 为全局共享记忆，未清——如需可手动删除 data/agents-plugin/memories/ 下文件）')
+    } catch (e) {
+      Log.error('[clear] 清空失败', e?.message || e)
+      await this.e.reply(`清空失败：${e?.message || e}`)
+    }
+    return true
+  }
+
 
   // —— 人设 ——
   async personaList() {
