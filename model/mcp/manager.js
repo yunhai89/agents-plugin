@@ -72,8 +72,13 @@ export class McpManager {
 
   async add(name, cfg = {}) {
     if (this._entries.has(name)) await this.remove(name)
+    const transport = buildTransport({ ...cfg, name })
+    // 上报子进程 stderr（npx 下载失败/包不存在/服务端崩溃等原因才可见，否则只剩 timeout）
+    if (transport && typeof transport.onLog !== 'undefined') {
+      transport.onLog = (chunk) => this.logger('warn', `[mcp] ${name} stderr: ${String(chunk).trim()}`)
+    }
     const client = new MCPClient({
-      transport: buildTransport({ ...cfg, name }),
+      transport,
       clientInfo: cfg.clientInfo,
       requestTimeout: cfg.requestTimeout || this.requestTimeout,
     })

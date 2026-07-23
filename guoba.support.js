@@ -27,6 +27,11 @@ function setPath(obj, path, value) {
   cur[keys[keys.length - 1]] = value
 }
 
+/** 解包 { mcpServers: {...} }（用户常贴 Claude Desktop 标准包装） */
+function unwrapServers(s) {
+  return s && typeof s === 'object' && s.mcpServers ? s.mcpServers : s
+}
+
 // 常用选项集
 const OPT = {
   trigger: [
@@ -173,7 +178,7 @@ export function supportGuoba() {
         data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
         // mcp.servers（对象）→ YAML 文本（serversYaml 虚拟字段，textarea 展示/编辑）
         try {
-          const servers = data?.agent?.mcp?.servers || {}
+          const servers = unwrapServers(data?.agent?.mcp?.servers || {})
           data.agent.mcp = { ...(data.agent?.mcp || {}), serversYaml: yaml.stringify(servers) || '' }
           delete data.agent.mcp.servers
         } catch { /* noop */ }
@@ -191,10 +196,11 @@ export function supportGuoba() {
           delete data['agent.thinking.enable']
           delete data['agent.thinking.budget_tokens']
         }
-        // MCP servers：面板 YAML 文本 → 对象
+        // MCP servers：面板 YAML 文本 → 对象（用户可能贴 { mcpServers: {...} } 标准包装，解包）
         if ('agent.mcp.serversYaml' in (data || {})) {
           try {
-            const servers = yaml.parse(data['agent.mcp.serversYaml'] || '') || {}
+            let servers = yaml.parse(data['agent.mcp.serversYaml'] || '') || {}
+            servers = unwrapServers(servers)
             cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
             delete data['agent.mcp.serversYaml']
           } catch (e) {
