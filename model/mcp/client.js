@@ -13,13 +13,15 @@ import { JsonRpcChannel, JsonRpcError, ERR } from './jsonrpc.js'
 import { PROTOCOL_VERSION, METHODS, LOG_LEVELS } from './protocol.js'
 
 export class MCPClient {
-  constructor({ transport, clientInfo, protocolVersion, capabilities, requestTimeout } = {}) {
+  constructor({ transport, clientInfo, protocolVersion, capabilities, requestTimeout, connectTimeout } = {}) {
     if (!transport) throw new Error('MCPClient 需要 transport')
     this.transport = transport
     this.clientInfo = clientInfo || { name: 'agents-plugin-mcp', version: '0.1.0' }
     this.requestedProtocolVersion = protocolVersion || PROTOCOL_VERSION
     this.requestedCapabilities = capabilities || {}
     this.requestTimeout = requestTimeout ?? 60000
+    // initialize 握手用更长超时：stdio 服务端常经 npx 首次拉取（下载耗时远超普通请求）
+    this.connectTimeout = connectTimeout ?? Math.max(this.requestTimeout, 180000)
 
     this._serverCapabilities = null
     this._serverInfo = null
@@ -59,7 +61,7 @@ export class MCPClient {
       protocolVersion: this.requestedProtocolVersion,
       capabilities: this.requestedCapabilities,
       clientInfo: this.clientInfo,
-    })
+    }, { timeout: this.connectTimeout })
     this._serverCapabilities = res.capabilities || {}
     this._serverInfo = res.serverInfo || {}
     this._negotiatedVersion = res.protocolVersion || this.requestedProtocolVersion
