@@ -106,6 +106,12 @@ export function defineSkill(spec) {
 
 // ─── 目录编译：移植 OpenClaw formatSkillsForPrompt（name+description 精简块）───
 
+/** 截断过长的 description（skillhub 技能描述常很长），保持目录精简 */
+function truncateDesc(desc, max = 80) {
+  const s = String(desc || '').replace(/\s+/g, ' ').trim()
+  return s.length > max ? s.slice(0, max) + '…' : s
+}
+
 /**
  * 把 skill 列表编译成注入 system prompt 的 `<available_skills>` 目录块。
  * 仅 name+description（~24 token/skill），让模型"看见有哪些 skill"。
@@ -125,7 +131,7 @@ export function formatCatalog(skills) {
   for (const s of list) {
     lines.push('  <skill>')
     lines.push(`    <name>${escapeXml(s.name)}</name>`)
-    lines.push(`    <description>${escapeXml(s.description)}</description>`)
+    lines.push(`    <description>${escapeXml(truncateDesc(s.description))}</description>`)
     lines.push('  </skill>')
   }
   lines.push('</available_skills>')
@@ -307,40 +313,59 @@ export function parseSkillMd(text, fallbackName) {
 }
 
 /**
- * 从目录加载 skill 包：*.md（frontmatter+正文）/ *.js（export skill 结构）。
+ * 从目录加载 skill 包，支持两种形态（参考 OpenClaw AgentSkills）：
+ *   - 扁平：顶层 `*.md`（说明书）/ `*.js`（工具包 export）
+ *   - 目录型：任意深度的 `SKILL.md`（如 skillhub 安装的 `<name>/SKILL.md`）
+ * 子目录里非 SKILL.md 的 .md（README/references/模板等）不当作技能加载。
  * 单文件失败跳过，不中断整体。
  */
 export async function loadSkillPack(dir, { logger } = {}) {
   const log = logger || (() => {})
-  const out = []
-  let files = []
-  try {
-    files = fs.readdirSync(dir, { withFileTypes: true })
-      .filter((f) => f.isFile() && /\.(md|js|mjs)$/.test(f.name))
-      .map((f) => f.name)
-      .sort()
-  } catch (e) {
-    return out
+  const found = [] // {kind:'md'|'js', full, fallbackName?}
+  const walk = (d, depth) => {
+    if (depth > 4) return
+    let entries = []
+    try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch { return }
+    for (const ent of entries) {
+      if (ent.name.startsWith('.')) continue // 跳过 .skills_store_lock.json 等隐藏文件
+      const full = path.resolve(d, ent.name)
+      if (ent.isDirectory()) {
+        walk(full, depth + 1)
+      } else if (ent.isFile()) {
+        const lower = ent.name.toLowerCase()
+        if (lower === 'skill.md') {
+          found.push({ kind: 'md', full, fallbackName: path.basename(d) })
+        } else if (depth === 0 && /\.md$/.test(ent.name)) {
+          found.push({ kind: 'md', full, fallbackName: ent.name.replace(/\.md$/i, '') })
+        } else if (depth === 0 && /\.(js|mjs)$/.test(ent.name)) {
+          found.push({ kind: 'js', full })
+        }
+        // 其余（子目录里的非 SKILL.md / 非顶层文件）跳过
+      }
+    }
   }
-  for (const name of files) {
-    const full = path.resolve(dir, name)
+  walk(dir, 0)
+  found.sort((a, b) => a.full.localeCompare(b.full))
+
+  const out = []
+  for (const item of found) {
     try {
-      if (name.endsWith('.md')) {
-        const raw = fs.readFileSync(full, 'utf8')
-        const spec = parseSkillMd(raw, name.replace(/\.md$/, ''))
-        out.push(defineSkill(spec))
-        log('info', `[skill] 加载 ${spec.name}`)
-      } else {
-        const mod = await import(pathToFileURL(full).href)
+      if (item.kind === 'js') {
+        const mod = await import(pathToFileURL(item.full).href)
         const exp = mod?.default ?? mod?.skill ?? mod?.skills ?? mod
         const arr = Array.isArray(exp) ? exp : exp && typeof exp === 'object' ? [exp] : []
         for (const s of arr) {
           try { out.push(defineSkill(s)); log('info', `[skill] 加载 ${s.name}`) }
-          catch (e) { log('warn', `[skill] 校验失败 ${name}:`, e?.message || e) }
+          catch (e) { log('warn', `[skill] 校验失败 ${item.full}:`, e?.message || e) }
         }
+      } else {
+        const raw = fs.readFileSync(item.full, 'utf8')
+        const spec = parseSkillMd(raw, item.fallbackName)
+        out.push(defineSkill(spec))
+        log('info', `[skill] 加载 ${spec.name}`)
       }
     } catch (e) {
-      log('error', `[skill] 加载失败 ${name}:`, e?.message || e)
+      log('error', `[skill] 加载失败 ${item.full}:`, e?.message || e)
     }
   }
   return out
