@@ -15,22 +15,46 @@ import { StdioTransport } from './transport/stdio.js'
 import { HttpTransport } from './transport/http.js'
 import { loadMcpTools } from './bridge.js'
 
+/**
+ * 归一化单个服务端配置：兼容 Claude Desktop / Z.AI 等标准格式。
+ *   - type: 'stdio'|'http'|'sse'|'streamable' → transport
+ *   - 其余字段（command/args/env/cwd、url/headers...）原样保留
+ */
+export function normalizeServerCfg(cfg = {}) {
+  const c = { ...cfg }
+  if (c.type && !c.transport) {
+    const t = String(c.type).toLowerCase()
+    if (t === 'http' || t === 'sse' || t === 'streamable' || t === 'streamable-http') c.transport = 'http'
+    else c.transport = 'stdio'
+  }
+  return c
+}
+
+/** 解包 { mcpServers: {...} } 包装（Claude Desktop 格式），返回 { name: cfg } */
+export function unwrapServers(servers = {}) {
+  if (servers && typeof servers === 'object' && servers.mcpServers && typeof servers.mcpServers === 'object') {
+    return servers.mcpServers
+  }
+  return servers
+}
+
 export function buildTransport(cfg = {}) {
+  const c = normalizeServerCfg(cfg)
   // 预构建的传输实例直接复用（便于测试注入）
-  if (cfg.transport && typeof cfg.transport === 'object') return cfg.transport
-  if (cfg.transport === 'http' || (!cfg.transport && cfg.url)) {
+  if (c.transport && typeof c.transport === 'object') return c.transport
+  if (c.transport === 'http' || (!c.transport && c.url)) {
     return new HttpTransport({
-      url: cfg.url,
-      headers: cfg.headers || {},
-      sessionId: cfg.sessionId,
-      listen: cfg.listen,
-      fetcher: cfg.fetcher,
-      requestTimeout: cfg.requestTimeout,
+      url: c.url,
+      headers: c.headers || {},
+      sessionId: c.sessionId,
+      listen: c.listen,
+      fetcher: c.fetcher,
+      requestTimeout: c.requestTimeout,
     })
   }
   // 默认 stdio
-  if (!cfg.command) throw new Error(`MCP 服务端配置需要 command(stdio) 或 url(http)`)
-  return new StdioTransport({ command: cfg.command, args: cfg.args || [], env: cfg.env, cwd: cfg.cwd })
+  if (!c.command) throw new Error(`MCP 服务端配置需要 command(stdio) 或 url(http)`)
+  return new StdioTransport({ command: c.command, args: c.args || [], env: c.env, cwd: c.cwd })
 }
 
 export class McpManager {
@@ -85,8 +109,9 @@ export class McpManager {
     this._entries.delete(name)
   }
 
-  /** 批量启动；servers 为 { name: cfg } 或 [{ name, ...cfg }]；enabled:false 跳过 */
+  /** 批量启动；servers 为 { name: cfg } 或 [{ name, ...cfg }] 或 { mcpServers: {...} }；enabled:false 跳过 */
   async start(servers = {}) {
+    servers = unwrapServers(servers)
     const list = Array.isArray(servers)
       ? servers.map((s) => [s.name, s]).filter(([_, c]) => c && c.enabled !== false)
       : Object.entries(servers).filter(([_, c]) => c && c.enabled !== false)

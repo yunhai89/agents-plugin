@@ -375,6 +375,7 @@ export class Chat extends plugin {
         { reg: '^#拒绝\\s*(\\d+)', fnc: 'reject', permission: 'master' },
         { reg: '^#待确认$', fnc: 'pending', permission: 'master' },
         { reg: '^#mcp$', fnc: 'mcpStatus', permission: 'master' },
+        { reg: '^#添加mcp', fnc: 'addMcp', permission: 'master' },
         { reg: '^#agents重载$', fnc: 'agentsReload', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
@@ -598,6 +599,55 @@ export class Chat extends plugin {
     await this.e.reply(`已停止 ${name}`)
     return true
   }
+
+  // —— 添加 MCP（标准 mcpServers JSON）→ 连接验证 → 成功则持久化 ——
+  async addMcp() {
+    const body = this.e.msg.replace(/^#添加mcp\b\s*/, '').trim()
+    if (!body) {
+      await this.e.reply([
+        '用法：#添加mcp <mcpServers JSON>',
+        '支持 Claude Desktop / Z.AI 标准格式，例如：',
+        '```json',
+        '{ "mcpServers": { "zai": { "type": "stdio", "command": "npx", "args": ["-y","@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "xxx" } } } }',
+        '```',
+        '添加后会立即连接验证；成功则写入配置（持久化、热加载），失败会报错。',
+      ].join('\n'))
+      return true
+    }
+    let parsed
+    try { parsed = JSON.parse(body) }
+    catch (e) { await this.e.reply(`❌ JSON 解析失败：${e?.message || e}\n请粘贴完整的 mcpServers JSON。`); return true }
+    let servers = parsed?.mcpServers || parsed
+    if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+      await this.e.reply('❌ 未找到服务端配置（需 { "mcpServers": {...} } 或 { "name": {...} }）'); return true
+    }
+    const rt = await getRuntime()
+    const cfg = Config.get()
+    cfg.agent = cfg.agent || {}
+    cfg.agent.mcp = cfg.agent.mcp || {}
+    cfg.agent.mcp.servers = cfg.agent.mcp.servers || {}
+    const results = []
+    let anyOk = false
+    for (const [name, scfg] of Object.entries(servers)) {
+      try {
+        // add() 会连接 + 注册工具 + 验证可用（失败 entry.status='error'）
+        const entry = await rt.mcp.add(name, { ...scfg, enabled: true })
+        if (entry.status === 'connected') {
+          cfg.agent.mcp.servers[name] = scfg
+          anyOk = true
+          results.push(`✅ ${name}：已连接，注册 ${entry.tools} 个工具（已写入配置）`)
+        } else {
+          results.push(`❌ ${name}：${entry.error || entry.status}（未写入配置）`)
+        }
+      } catch (e) {
+        results.push(`❌ ${name}：${e?.message || e}（未写入配置）`)
+      }
+    }
+    if (anyOk) Config.save(cfg) // 持久化成功的 + 触发热加载
+    await this.e.reply(results.join('\n'))
+    return true
+  }
+
 
   async mcpStatus() {
     const rt = await getRuntime()

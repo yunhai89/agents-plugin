@@ -26,6 +26,7 @@ const SECTIONS = [
       { cmd: '#忘掉 +关键词', desc: '按关键词遗忘记忆' },
       { cmd: '#我的提醒', desc: '查看我的提醒' },
       { cmd: '#取消提醒 +id', desc: '取消指定提醒' },
+      { cmd: '#清空所有记录', desc: '清空自己的对话/记忆/提醒等（不含配置，2步确认）' },
     ],
   },
   {
@@ -49,9 +50,12 @@ const SECTIONS = [
     title: '主人指令',
     commands: [
       { cmd: '#模型切换 +id', desc: '切换 LLM 模型' },
+      { cmd: '#添加mcp +JSON', desc: '按标准 mcpServers JSON 添加 MCP（连接验证+持久化）' },
       { cmd: '#启用mcp +名', desc: '启用某个 MCP 服务端' },
       { cmd: '#停止mcp +名', desc: '停止某个 MCP 服务端' },
       { cmd: '#mcp', desc: '查看 MCP 连接状态' },
+      { cmd: '#agents更新', desc: '更新插件（有改动自动重启）' },
+      { cmd: '#agents重载', desc: '热重载配置（免重启）' },
       { cmd: '#确认 / #拒绝 +id', desc: '审批待执行的危险动作' },
       { cmd: '#待确认', desc: '列出待审批' },
     ],

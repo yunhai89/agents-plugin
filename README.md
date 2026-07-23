@@ -302,6 +302,7 @@ mcp:
 | --- | --- |
 | `#模型切换 +id` | 切换 LLM 模型 |
 | `#启用mcp +名` / `#停止mcp +名` | MCP 服务端启停 |
+| `#添加mcp +JSON` | 按标准 `mcpServers` JSON 添加 MCP（连接验证+持久化），如 `{ "mcpServers": { "zai": { "type":"stdio", "command":"npx", "args":[...], "env":{...} } } }` |
 | `#mcp` | MCP 连接状态 |
 | `#确认 +id` / `#拒绝 +id` / `#待确认` | 审批待执行危险动作 |
 | `#agents帮助` / `#agents状态` | 帮助图 / 运行状态 |

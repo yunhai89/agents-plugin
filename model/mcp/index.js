@@ -30,7 +30,7 @@ import {
 } from './jsonrpc.js'
 import { PROTOCOL_VERSION, METHODS, CONTENT, LOG_LEVELS } from './protocol.js'
 import { loadMcpTools, mcpResultToString, resolveCategory } from './bridge.js'
-import { McpManager, buildTransport } from './manager.js'
+import { McpManager, buildTransport, normalizeServerCfg, unwrapServers } from './manager.js'
 
 export {
   MCPClient,
@@ -58,4 +58,6 @@ export {
   resolveCategory,
   McpManager,
   buildTransport,
+  normalizeServerCfg,
+  unwrapServers,
 }
