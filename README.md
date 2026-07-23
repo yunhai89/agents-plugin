@@ -305,7 +305,8 @@ mcp:
 | `#确认 +id` / `#拒绝 +id` / `#待确认` | 审批待执行危险动作 |
 | `#agents帮助` / `#agents状态` | 帮助图 / 运行状态 |
 | `#agents重载` | 热重载配置并立即重建运行时（model/tools/skills/mcp，无需重启框架） |
-| `#agents更新` | git pull 拉取最新代码 + 热加载（数据/配置/技能改动即时生效；JS 代码改动需重启 Yunzai） |
+| `#agents更新` / `#agents强制更新` | git pull 拉取最新代码（强制=reset 后 rebase），有代码改动时自动重启 Yunzai 生效 |
+| `#agents版本` / `#agents更新日志` | 最近提交时间 / 本次更新日志 |
 
 ---
 

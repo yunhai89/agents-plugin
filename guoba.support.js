@@ -13,6 +13,7 @@
  */
 import Config from './utils/Config.js'
 import Log from './utils/Log.js'
+import yaml from 'yaml'
 
 /** 按点路径写入嵌套对象（不引 lodash） */
 function setPath(obj, path, value) {
@@ -146,6 +147,11 @@ export function supportGuoba() {
         { field: 'agent.research.maxRounds', label: '最大轮次', component: 'InputNumber', componentProps: { min: 1, max: 10 } },
         { field: 'agent.research.workerModel', label: '子代理模型', bottomHelpMessage: '空则用主模型；可填便宜模型省钱', component: 'Input' },
 
+        // —— MCP ——
+        { label: 'MCP 服务端', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.mcp.requestTimeout', label: '请求超时(毫秒)', component: 'InputNumber', componentProps: { min: 1000, step: 1000 } },
+        { field: 'agent.mcp.serversYaml', label: 'MCP 服务端配置（YAML）', helpMessage: '用 YAML 编辑 servers（stdio 子进程 / http 远程）。保存即热加载。', bottomHelpMessage: '示例：\nfs:\n  command: npx\n  args: ["-y","@modelcontextprotocol/server-filesystem","./"]\n  prefix: fs\n  category: query\nremote:\n  transport: http\n  url: https://example.com/mcp\n  prefix: rmt\n  enabled: true', component: 'InputTextArea', componentProps: { placeholder: 'fs:\n  command: npx\n  args: [...]\n  prefix: fs\n  category: query' } },
+
         // —— ⚠️ 终端(高危) ——
         { label: '⚠️ 终端执行(高危)', component: 'SOFT_GROUP_BEGIN' },
         {
@@ -165,6 +171,12 @@ export function supportGuoba() {
         // thinking：provider 原生 {type,budget_tokens}|null → 面板友好 {enable,budget_tokens}
         const tk = data?.agent?.thinking
         data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
+        // mcp.servers（对象）→ YAML 文本（serversYaml 虚拟字段，textarea 展示/编辑）
+        try {
+          const servers = data?.agent?.mcp?.servers || {}
+          data.agent.mcp = { ...(data.agent?.mcp || {}), serversYaml: yaml.stringify(servers) || '' }
+          delete data.agent.mcp.servers
+        } catch { /* noop */ }
         return data
       },
       // 保存配置（前端点确定后调用）；合并点路径 → Config.save → 强制热加载
@@ -178,6 +190,17 @@ export function supportGuoba() {
           cfg.agent.thinking = enable ? { type: 'enabled', budget_tokens: Number(budget) || 16000 } : null
           delete data['agent.thinking.enable']
           delete data['agent.thinking.budget_tokens']
+        }
+        // MCP servers：面板 YAML 文本 → 对象
+        if ('agent.mcp.serversYaml' in (data || {})) {
+          try {
+            const servers = yaml.parse(data['agent.mcp.serversYaml'] || '') || {}
+            cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
+            delete data['agent.mcp.serversYaml']
+          } catch (e) {
+            Log.warn('[guoba] MCP servers YAML 解析失败，已忽略', e?.message || e)
+            delete data['agent.mcp.serversYaml']
+          }
         }
         for (const [p, v] of Object.entries(data || {})) {
           let val = v
