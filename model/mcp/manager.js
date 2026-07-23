@@ -75,7 +75,7 @@ export class McpManager {
     const transport = buildTransport({ ...cfg, name })
     // 上报子进程 stderr（npx 下载失败/包不存在/服务端崩溃等原因才可见，否则只剩 timeout）
     if (transport && typeof transport.onLog !== 'undefined') {
-      transport.onLog = (chunk) => this.logger('warn', `[mcp] ${name} stderr: ${String(chunk).trim()}`)
+      transport.onLog = (chunk) => this.logger('warn', `${name} stderr: ${String(chunk).trim()}`)
     }
     const client = new MCPClient({
       transport,
@@ -91,14 +91,14 @@ export class McpManager {
     try {
       await client.connect()
       const prefix = this._prefix(cfg, name)
-      const count = await loadMcpTools(client, this.registry, { prefix, category: cfg.category, filter: cfg.filter })
+      const count = await loadMcpTools(client, this.registry, { prefix, category: cfg.category, filter: cfg.filter, logger: this.logger })
       entry.tools = count
       entry.status = 'connected'
-      this.logger('info', `[mcp] ${name} 已连接，注册 ${count} 个工具（${prefix}__*）`)
+      this.logger('info', `${name} 已连接，注册 ${count} 个工具（${prefix}__*）`)
     } catch (e) {
       entry.status = 'error'
       entry.error = this._formatConnectError(e, cfg)
-      this.logger('error', `[mcp] ${name} 连接失败：${entry.error}`)
+      this.logger('error', `${name} 连接失败：${entry.error}`)
     }
     return entry
   }

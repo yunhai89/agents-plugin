@@ -45,22 +45,28 @@ export class ToolRegistry {
     return this
   }
 
-  /** AOP 包装：调用前后统一打日志、计时；出错打 warn 并抛出（由调用方归一为 {error}） */
+  /** AOP 包装：调用前后统一打日志、计时；出错打 warn 并抛出（由调用方归一为 {error}）。
+   *  MCP 工具(meta.mcp)用其专用 logger、默认 info 级（调用可见）；其余工具仅 debug。 */
   #wrap(tool) {
     const self = this
     const orig = tool.execute
     const name = tool.name
+    const meta = tool.meta || {}
+    const isMcp = !!meta.mcp
+    const lg = typeof meta.logger === 'function' ? meta.logger : self.logger
     return {
       ...tool,
       execute: async function (params, ctx) {
         const t0 = Date.now()
-        self.logger('debug', 'tool call', name, 'args=', brief(params))
+        if (isMcp) lg('info', `调用 ${name}`, '参数=', brief(params))
+        else self.logger('debug', 'tool call', name, 'args=', brief(params))
         try {
           const r = await orig.call(this, params, ctx)
-          self.logger('debug', 'tool done', name, `ms=${Date.now() - t0}`, 'preview=', brief(r, 140))
+          if (isMcp) lg('info', `完成 ${name}`, `耗时=${Date.now() - t0}ms`)
+          else self.logger('debug', 'tool done', name, `ms=${Date.now() - t0}`, 'preview=', brief(r, 140))
           return r
         } catch (e) {
-          self.logger('warn', 'tool error', name, e?.message || e, 'args=', brief(params))
+          lg('warn', 'tool error', name, e?.message || e, 'args=', brief(params))
           throw e
         }
       },

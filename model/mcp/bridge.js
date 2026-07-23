@@ -42,7 +42,7 @@ export function mcpResultToString({ content, isError } = {}) {
  * @param {object} opts { prefix?, category?(string|function|map), filter? }
  * @returns {Promise<number>} 注册的工具数
  */
-export async function loadMcpTools(client, registry, { prefix, category = 'query', filter } = {}) {
+export async function loadMcpTools(client, registry, { prefix, category = 'query', filter, logger } = {}) {
   if (!client || !registry) throw new Error('loadMcpTools 需要 client 与 registry')
   const { tools = [] } = await client.listTools()
   for (const tool of tools) {
@@ -55,7 +55,8 @@ export async function loadMcpTools(client, registry, { prefix, category = 'query
       description: tool.description || '',
       parameters: tool.inputSchema || { type: 'object', properties: {} },
       category: resolveCategory(tool, category),
-      meta: { mcp: true, originalName: origName },
+      // logger 附在 meta（仅运行时用，不入 LLM 工具目录）：ToolRegistry AOP 据此用 mcp logger 打 info 级调用日志
+      meta: { mcp: true, originalName: origName, logger },
       async execute(args) {
         const result = await client.callTool(origName, args || {})
         return mcpResultToString(result)
