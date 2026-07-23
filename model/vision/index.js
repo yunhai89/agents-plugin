@@ -34,7 +34,10 @@ export async function describeImages(vision, mediaList, question) {
         desc = ''
       }
       const label = mf.name ? `[图片 ${mf.name}]` : '[图片]'
-      const text = desc ? `${label}：${desc}` : `${label}（识别失败/为空）`
+      // 保留图片直链：主模型无视觉时看不到图，但可把此 URL 传给视觉类工具/MCP（如 analyze_image）识别，
+      // 否则图片被消耗成纯文本后，用户让它用 MCP 识别时模型手里没有地址可传 → "没有看到图片"。
+      const urlPart = mf.url ? `\n（图片直链，可供视觉类工具/MCP 使用：${mf.url}）` : ''
+      const text = desc ? `${label}：${desc}${urlPart}` : `${label}（识别失败/为空）${urlPart}`
       // 替换为文本载体媒体：buildContent 非视觉路径会按 text/plain 抽取为文本
       out.push({
         ...mf,
