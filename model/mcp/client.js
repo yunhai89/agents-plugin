@@ -54,6 +54,11 @@ export class MCPClient {
     })
     this.transport.onMessage = (msg) => this.channel.receive(msg)
     this.transport.onError = (e) => { try { this._onTransportError(e) } catch { /* noop */ } }
+    // 子进程退出/传输关闭：立即拒绝 pending 请求（含 initialize），并带上退出码与 stderr 末尾
+    this.transport.onClose = (info) => {
+      this._closeInfo = info || null
+      if (this.channel && !this.channel.closed) this.channel.abort(new JsonRpcError(-1, this._closeReason(info)))
+    }
 
     await this.transport.start()
 
@@ -73,6 +78,17 @@ export class MCPClient {
   _onTransportError(e) {
     // 默认把传输错误冒泡为未处理；子类/调用方可覆盖
     this._transportError = e
+  }
+
+  /** 把传输 close 信息格式化为可读原因（退出码 / spawn 失败 / stderr 末尾） */
+  _closeReason(info) {
+    if (!info) return 'transport closed（传输关闭）'
+    const bits = []
+    if (info.code != null && info.code !== '') bits.push(`进程退出码 ${info.code}`)
+    if (info.reason) bits.push(info.reason)
+    let r = bits.length ? `传输关闭（${bits.join('；')}）` : '传输关闭'
+    if (info.stderrTail) r += `\nstderr 末尾:\n${info.stderrTail}`
+    return r
   }
 
   async ping() { return this.channel.request(METHODS.PING, {}) }

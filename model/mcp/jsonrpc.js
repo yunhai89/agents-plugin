@@ -70,6 +70,16 @@ export class JsonRpcChannel {
     this.timeout = timeout
     this._id = 0
     this._pending = new Map()
+    this.closed = false
+  }
+
+  /** 信道关闭：立即拒绝所有 pending 请求（传输断开/子进程退出时调用，避免空等到超时） */
+  abort(reason) {
+    if (this.closed) return
+    this.closed = true
+    const err = reason instanceof Error ? reason : new JsonRpcError(-1, String(reason || 'aborted'))
+    for (const [, p] of this._pending) { try { p.reject(err) } catch { /* noop */ } }
+    this._pending.clear()
   }
 
   _nextId() {
@@ -79,6 +89,8 @@ export class JsonRpcChannel {
 
   /** 发送请求并等结果（按 id 相关；超时/中止 reject） */
   request(method, params, { timeout = this.timeout, signal } = {}) {
+    // 信道已关闭（子进程退出/传输断开）：直接失败，不再空等超时
+    if (this.closed) return Promise.reject(new JsonRpcError(-1, `channel closed: ${method}`))
     const id = this._nextId()
     const msg = makeRequest(id, method, params)
     return new Promise((resolve, reject) => {

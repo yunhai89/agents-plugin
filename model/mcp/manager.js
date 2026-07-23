@@ -97,10 +97,18 @@ export class McpManager {
       this.logger('info', `[mcp] ${name} 已连接，注册 ${count} 个工具（${prefix}__*）`)
     } catch (e) {
       entry.status = 'error'
-      entry.error = e?.message || String(e)
+      entry.error = this._formatConnectError(e, cfg)
       this.logger('error', `[mcp] ${name} 连接失败：${entry.error}`)
     }
     return entry
+  }
+
+  /** 握手失败时补充命令行与排查提示，避免只剩一句看不懂的 "request timeout: initialize" */
+  _formatConnectError(e, cfg) {
+    const msg = e?.message || String(e)
+    if (!/initialize|transport closed|request timeout|传输关闭|channel closed/i.test(msg)) return msg
+    const cmd = cfg.command ? `${cfg.command} ${(cfg.args || []).join(' ')}`.trim() : (cfg.url || '')
+    return `${msg}${cmd ? `\n  命令：${cmd}` : ''}\n  常见原因：① command 不在运行环境 PATH（pm2/systemd/docker 常见，改用 node/npx 绝对路径）② 服务端启动即崩溃（缺 API Key / 依赖 / Node 版本，看上方 stderr 末尾）③ npx 首次下载超时（网络慢或被墙，先手动 npm i -g 装好）`
   }
 
   async remove(name) {

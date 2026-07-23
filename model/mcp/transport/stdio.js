@@ -16,6 +16,8 @@ export class StdioTransport extends BaseTransport {
     this.cwd = cwd
     this._proc = null
     this._buffer = ''
+    this._stderrTail = ''
+    this._spawnError = null
   }
 
   async start() {
@@ -27,9 +29,27 @@ export class StdioTransport extends BaseTransport {
     this._proc.stdout.setEncoding('utf8')
     this._proc.stdout.on('data', (chunk) => this._onData(chunk))
     this._proc.stderr.setEncoding('utf8')
-    this._proc.stderr.on('data', (chunk) => this._onLog(chunk))
-    this._proc.on('error', (e) => this._onError(e))
-    this._proc.on('close', (code) => this._onClose(code))
+    this._proc.stderr.on('data', (chunk) => { this._onLog(chunk); this._appendStderr(chunk) })
+    // spawn 失败（如 ENOENT：command 不在 PATH）—— 'error' 先于 'close' 触发，记录后由 close 统一上报
+    this._proc.on('error', (e) => { this._spawnError = e; this._onError(e) })
+    this._proc.on('close', (code) => this._onProcClose(code))
+  }
+
+  _appendStderr(chunk) {
+    // 仅保留末尾 ~4KB，用于进程崩溃时定位原因（缺 API Key / 依赖缺失 / npm 报错等）
+    this._stderrTail = (this._stderrTail + String(chunk)).slice(-4096)
+  }
+
+  _onProcClose(code) {
+    const info = { code }
+    if (this._spawnError) {
+      const e = this._spawnError
+      info.reason = `spawn 失败：${e.code ? `${e.code} ` : ''}${e.message}`
+      if (e.code === 'ENOENT') info.reason += `（${this.command} 不在 PATH？改用绝对路径）`
+    }
+    const tail = this._stderrTail.trim()
+    if (tail) info.stderrTail = tail.slice(-800)
+    this._onClose(info)
   }
 
   _onData(chunk) {
