@@ -31,57 +31,6 @@ function unwrapServers(s) {
   return s && typeof s === 'object' && s.mcpServers ? s.mcpServers : s
 }
 
-/** servers 对象(map) → 面板数组：每项一个服务（GSubForm multiple 展示/编辑） */
-function serversMapToList(servers) {
-  const s = unwrapServers(servers || {})
-  return Object.entries(s).map(([name, cfg]) => {
-    cfg = cfg || {}
-    const isHttp = cfg.type === 'http' || cfg.transport === 'http' || (!!cfg.url && !cfg.command)
-    return {
-      name,
-      type: isHttp ? 'http' : 'stdio',
-      enabled: cfg.enabled !== false,
-      command: cfg.command || '',
-      args: Array.isArray(cfg.args) ? cfg.args.join('\n') : (cfg.args || ''),
-      url: cfg.url || '',
-      env: cfg.env && typeof cfg.env === 'object' ? Object.entries(cfg.env).map(([k, v]) => `${k}=${v}`).join('\n') : '',
-      prefix: cfg.prefix != null ? String(cfg.prefix) : '',
-      category: cfg.category || '',
-    }
-  })
-}
-
-/** 面板数组 → servers 对象(map)，写回 config.agent.mcp.servers（无名条目跳过） */
-function serversListToMap(list) {
-  const out = {}
-  for (const item of (Array.isArray(list) ? list : [])) {
-    if (!item || !String(item.name || '').trim()) continue
-    const name = String(item.name).trim()
-    const cfg = {}
-    const http = item.type === 'http' || (!!item.url && !item.command)
-    cfg.type = http ? 'http' : 'stdio'
-    if (http) {
-      if (item.url) cfg.url = item.url
-    } else {
-      if (item.command) cfg.command = item.command
-      if (item.args) cfg.args = String(item.args).split('\n').map((x) => x.trim()).filter(Boolean)
-    }
-    if (item.env) {
-      const env = {}
-      for (const line of String(item.env).split('\n')) {
-        const t = line.trim(); if (!t) continue
-        const i = t.indexOf('='); if (i > 0) env[t.slice(0, i).trim()] = t.slice(i + 1)
-      }
-      if (Object.keys(env).length) cfg.env = env
-    }
-    if (item.prefix && String(item.prefix).trim()) cfg.prefix = String(item.prefix).trim()
-    if (item.category && String(item.category).trim()) cfg.category = String(item.category).trim()
-    if (item.enabled === false) cfg.enabled = false
-    out[name] = cfg
-  }
-  return out
-}
-
 // 常用选项集
 const OPT = {
   trigger: [
@@ -206,26 +155,12 @@ export function supportGuoba() {
         { label: 'MCP 服务端', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.mcp.requestTimeout', label: '请求超时(毫秒)', component: 'InputNumber', componentProps: { min: 1000, step: 1000 } },
         {
-          field: 'agent.mcp.serversList',
-          label: 'MCP 服务端列表',
-          helpMessage: '可添加多个 MCP 服务端（每个一张子表单，支持增删）。保存即热加载。也可用聊天指令 #添加mcp 粘贴标准 mcpServers JSON。',
-          bottomHelpMessage: 'stdio：填 command + args(每行一个) + env(每行 KEY=VALUE)；http：填 url。name 作工具前缀默认值。Docker 精简镜像无 npx 见 README「agent.mcp」排查。',
-          component: 'GSubForm',
-          componentProps: {
-            multiple: true,
-            modalProps: { title: 'MCP 服务端配置' },
-            schemas: [
-              { field: 'name', label: '名称(唯一)', bottomHelpMessage: '同时是工具命名空间前缀的默认值', component: 'Input', required: true },
-              { field: 'enabled', label: '启用', component: 'Switch' },
-              { field: 'type', label: '传输方式', component: 'Select', componentProps: { options: [{ label: 'stdio(本地子进程)', value: 'stdio' }, { label: 'http(远程)', value: 'http' }] } },
-              { field: 'command', label: 'command(stdio)', bottomHelpMessage: '如 npx；Docker 精简镜像无 npx 时用绝对路径', component: 'Input', componentProps: { placeholder: 'npx' } },
-              { field: 'args', label: 'args(stdio，每行一个)', component: 'InputTextArea', componentProps: { placeholder: '-y\n@modelcontextprotocol/server-filesystem\n./' } },
-              { field: 'url', label: 'url(http)', component: 'Input', componentProps: { placeholder: 'https://example.com/mcp' } },
-              { field: 'env', label: '环境变量(每行 KEY=VALUE)', component: 'InputTextArea', componentProps: { placeholder: 'Z_AI_API_KEY=xxx\nZ_AI_MODE=ZHIPU' } },
-              { field: 'prefix', label: '工具前缀', bottomHelpMessage: '留空=用名称', component: 'Input' },
-              { field: 'category', label: 'RBAC 类别', bottomHelpMessage: 'query(读,默认)/system(写,需审批)等，留空=query', component: 'Input' },
-            ],
-          },
+          field: 'agent.mcp.serversJson',
+          label: 'MCP 服务端（mcpServers JSON）',
+          helpMessage: '直接粘贴标准 mcpServers JSON（支持 Claude Desktop 格式 { "mcpServers": {...} }），框架自动解析。保存即热加载。',
+          bottomHelpMessage: '示例：\n{\n  "mcpServers": {\n    "moegirl": { "command": "npx", "args": ["-y", "moegirl-wiki-mcp"] },\n    "remote": { "type": "http", "url": "https://x.com/mcp" }\n  }\n}\n\nstdio：command/args/env；http：type/url/headers。可同时配多个。Docker 精简镜像无 npx 见 README「agent.mcp」排查。',
+          component: 'InputTextArea',
+          componentProps: { placeholder: '{\n  "mcpServers": {\n    "xxx": { "command": "npx", "args": ["-y", "xxx"] }\n  }\n}', autosize: { minRows: 8, maxRows: 24 } },
         },
 
         // —— ⚠️ 终端(高危) ——
@@ -247,9 +182,10 @@ export function supportGuoba() {
         // thinking：provider 原生 {type,budget_tokens}|null → 面板友好 {enable,budget_tokens}
         const tk = data?.agent?.thinking
         data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
-        // mcp.servers（对象 map）→ 数组（serversList 虚拟字段，GSubForm multiple 展示/编辑）
+        // mcp.servers（对象 map）→ 标准 mcpServers JSON 文本（serversJson 虚拟字段，textarea 展示/编辑）
         try {
-          data.agent.mcp = { ...(data.agent?.mcp || {}), serversList: serversMapToList(data?.agent?.mcp?.servers || {}) }
+          const servers = unwrapServers(data?.agent?.mcp?.servers || {})
+          data.agent.mcp = { ...(data.agent?.mcp || {}), serversJson: JSON.stringify({ mcpServers: servers }, null, 2) }
           delete data.agent.mcp.servers
         } catch { /* noop */ }
         return data
@@ -257,6 +193,7 @@ export function supportGuoba() {
       // 保存配置（前端点确定后调用）；合并点路径 → Config.save → 强制热加载
       setConfigData(data, { Result }) {
         const cfg = Config.get()
+        const notes = []
         // 深度思考：面板 {enable,budget_tokens} → provider 原生 {type:'enabled',budget_tokens}|null
         if ('agent.thinking.enable' in (data || {})) {
           const cur = cfg.agent?.thinking || {}
@@ -266,16 +203,22 @@ export function supportGuoba() {
           delete data['agent.thinking.enable']
           delete data['agent.thinking.budget_tokens']
         }
-        // MCP servers：面板数组（serversList）→ 对象 map（写回 config.agent.mcp.servers）
-        if ('agent.mcp.serversList' in (data || {})) {
+        // MCP servers：面板 mcpServers JSON 文本 → 对象 map（写回 config.agent.mcp.servers）
+        // 支持 { "mcpServers": {...} } 标准包装 或 裸 { name: cfg }；解析失败则保留原配置并提示
+        if ('agent.mcp.serversJson' in (data || {})) {
+          const raw = String(data['agent.mcp.serversJson'] || '').trim()
           try {
-            const servers = serversListToMap(data['agent.mcp.serversList'])
-            cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
-            delete data['agent.mcp.serversList']
+            const servers = raw ? unwrapServers(JSON.parse(raw)) : {}
+            if (servers && typeof servers === 'object' && !Array.isArray(servers)) {
+              cfg.agent.mcp = { ...(cfg.agent?.mcp || {}), servers }
+            } else {
+              throw new Error('需为 { "mcpServers": {...} } 对象')
+            }
           } catch (e) {
-            Log.warn('[guoba] MCP servers 解析失败，已忽略', e?.message || e)
-            delete data['agent.mcp.serversList']
+            Log.warn('[guoba] MCP serversJson 解析失败，已保留原配置', e?.message || e)
+            notes.push(`MCP 配置 JSON 解析失败已忽略（保留原配置）：${e?.message || e}`)
           }
+          delete data['agent.mcp.serversJson']
         }
         for (const [p, v] of Object.entries(data || {})) {
           let val = v
@@ -290,7 +233,8 @@ export function supportGuoba() {
         // 故显式强制 reload(true) 触发热加载（运行时重建）并打日志。
         Log.mark('[guoba] 已通过锅巴保存配置，触发热加载')
         Config.reload(true)
-        return Result.ok({}, '保存成功（已自动热加载，无需重启）')
+        const msg = notes.length ? `保存成功（已自动热加载）。注意：${notes.join('；')}` : '保存成功（已自动热加载，无需重启）'
+        return Result.ok({}, msg)
       },
     },
   }
