@@ -114,20 +114,46 @@ function extractArgHint(args, name) {
  * @param {object} e Yunzai 事件
  * @param {object} opts { progress:bool }
  */
-function makeReplyStream(e, { progress = true, recall = 3 } = {}) {
+function makeReplyStream(e, { progress = true, recall = 3, provider = null, model = null } = {}) {
   if (!progress) return {}
   let lastAt = 0
   let lastTool = null
   let count = 0
   const MIN_INTERVAL = 1500 // ms：节流，防刷屏
   const MAX_MSGS = 8 // 单轮最多 8 条进度，防病态循环刷屏
+  // utility-model narrator state（OpenClaw Layer 2：主模型不产文本时，用廉价 LLM 生成一句话进度）
+  const toolEvents = []
+  let lastNarrationAt = 0
+  let narrationCount = 0
+
+  // fire-and-forget narrator：每 3 个工具事件或 15s 触发一次，单任务最多 3 次
+  async function tryNarrate() {
+    if (!provider || !model) return
+    const now = Date.now()
+    if (narrationCount >= 3) return
+    if (toolEvents.length < 3 && now - lastNarrationAt < 15000) return
+    if (now - lastNarrationAt < 5000) return
+    lastNarrationAt = now
+    narrationCount++
+    const events = toolEvents.slice(-5).map((ev, i) => `${i + 1}. ${ev}`).join('\n')
+    try {
+      const res = await provider.chat({
+        model,
+        messages: [{ role: 'user', content: `你是 AI 助手的进度播报员。根据以下工具调用记录，用一句简短口语化的话（不超过 30 字）概括助手现在在做什么。直接输出这句话，不加引号、不解释。\n\n工具调用记录：\n${events}` }],
+        max_tokens: 80,
+        stream: false,
+      })
+      const status = (res?.content || '').trim().replace(/^["「""']+|["「""']+$/g, '').slice(0, 40)
+      if (status) try { e.reply(`💭 ${status}`, false, { recallMsg: recall }) } catch { /* noop */ }
+    } catch { /* narrator 失败不影响主流程 */ }
+  }
+
   return {
     onToolStart(tc) {
       if (count >= MAX_MSGS) return
       const now = Date.now()
       const name = tc?.name
       if (!name) return
-      // 同工具 5s 内不重复 + 全局节流
       if (name === lastTool && now - lastAt < 5000) return
       if (now - lastAt < MIN_INTERVAL) return
       lastAt = now
@@ -137,6 +163,9 @@ function makeReplyStream(e, { progress = true, recall = 3 } = {}) {
       const hint = extractArgHint(tc?.arguments, name)
       const msg = hint ? `${label}：${hint}` : `${label}…`
       try { e.reply(msg, false, { recallMsg: recall }) } catch { /* noop */ }
+      // utility narrator：记录事件 + fire-and-forget 触发
+      toolEvents.push(msg.replace(/…$/, ''))
+      tryNarrate() // 不 await，不阻塞主循环
     },
   }
 }
@@ -571,7 +600,7 @@ export class Chat extends plugin {
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
     if (wantProgress) await this.e.reply('思考中…')
-    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3 })
+    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model })
     try {
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
