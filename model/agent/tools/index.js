@@ -3,7 +3,7 @@
  */
 export { ToolRegistry } from './registry.js'
 export { ExecutionContext } from './context.js'
-export { webSearchTool, ddgSearch, parseDDG, stripHtml } from './web.js'
+export { ddgSearch, parseDDG, stripHtml } from './web.js'
 export { noteTools } from './notes.js'
 export { clarifyTool, CLARIFY_TOOL_NAME } from './clarify.js'
 

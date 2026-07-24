@@ -31,7 +31,7 @@ import { presets as anthropicPresets } from '../model/anthropic/index.js'
 import { McpManager } from '../model/mcp/index.js'
 import { createMediaService, makeMediaTools } from '../model/media/index.js'
 import { detectCapabilities } from '../model/llm/capabilities.js'
-import { groupInfoTools, groupManageTools } from '../model/group/index.js'
+import { groupInfoTools, groupManageTools, groupHistoryTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
 import { loadToolPacks } from '../model/toolkit/index.js'
 import { createSearchManager, makeSearchTools } from '../model/search/index.js'
@@ -60,7 +60,6 @@ const PROGRESS_LABELS = {
   read_attachment: '📎 读取附件',
   get_group_file: '📎 获取文件',
   list_group_files: '📎 列出文件',
-  get_weather: '🌤️ 查天气',
   terminal: '💻 执行命令',
   process: '💻 进程操作',
   group_info: '⚙️ 查群信息',
@@ -187,6 +186,7 @@ async function buildRuntime() {
     tools
       .register(...groupInfoTools)
       .register(...groupManageTools)
+      .register(...groupHistoryTools) // get_chat_history：模型按需拉群聊近期记录（被动找回）
       .register(...miyousheTools)
   }
 
@@ -484,9 +484,13 @@ export class Chat extends plugin {
     // —— 情境感知：perception（数据：时间/角色/自我状态/近期对话）+ skill（说明书，按输入匹配）——
     let context
     try {
+      // 会话历史条数：供 perception 判断"上下文稀薄 → 主动补全近期群聊"（复用 session 缓存，零额外读盘）
+      let sessionLen
+      try { sessionLen = await rt.session.historyLength(ctx) } catch { sessionLen = undefined }
       const perception = await buildSituationalContext({
         ctx, runtime: rt, e: this.e, kv: rt.kv, cfg, bot: ctx.bot,
         historyCount: cfg.skill?.historyCount ?? 15,
+        sessionLen,
       })
       const matched = rt.skills.match({ input: text, ctx })
       const skillText = rt.skills.assemble(matched)

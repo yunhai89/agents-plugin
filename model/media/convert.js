@@ -97,9 +97,11 @@ function degradeBlock(mf, degrade) {
 function degradeNote(mf, degrade, errored) {
   if (degrade === 'skip') return null
   const size = mf.bytes ? `${(mf.bytes / 1024).toFixed(1)}KB` : '未知大小'
-  if (errored) return `[附件 ${mf.name}（${size}）获取失败：${mf.resolveError || '未知'}]`
+  // 图片只要有直链就附带，保证即便走到降级占位，主模型/MCP 仍能拿到地址去识别（不再"没有图片"）
+  const urlHint = (mf.kind === 'image' && mf.url) ? `；图片直链可供视觉类工具/MCP 使用：${mf.url}` : ''
+  if (errored) return `[附件 ${mf.name}（${size}）获取失败：${mf.resolveError || '未知'}${urlHint}]`
   const why = mf.kind === 'image' ? '当前模型不支持视觉' : '当前模型不支持该文件类型'
-  return `[附件 ${mf.name}（${size}，${mf.mime || mf.kind}）：${why}]`
+  return `[附件 ${mf.name}（${size}，${mf.mime || mf.kind}）：${why}${urlHint}]`
 }
 
 /**

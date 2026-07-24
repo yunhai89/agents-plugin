@@ -104,6 +104,17 @@ function selfStatus(runtime, cfg) {
   return lines.join('\n')
 }
 
+/** 拉取群内近期聊天记录 → "昵称: 文本" 正序行（适配器通常逆序返回，已翻转；失败返回空数组，不抛错） */
+async function fetchGroupHistoryLines({ e, bot, groupId, count }) {
+  const g = e?.group || bot?.pickGroup?.(groupId) || null
+  if (!g?.getChatHistory) return []
+  try {
+    const seq = e?.seq ?? e?.message_id ?? e?.source?.seq ?? undefined
+    const msgs = await g.getChatHistory(seq, count)
+    return formatHistory(msgs, e, count)
+  } catch { return [] }
+}
+
 /** 近期聊天记录：首次入群（群信息+历史）或久离补课 */
 async function recentHistory({ ctx, e, kv, bot, historyCount }) {
   if (!ctx?.isGroup || !ctx?.groupId || !kv) return null
@@ -129,14 +140,8 @@ async function recentHistory({ ctx, e, kv, bot, historyCount }) {
     } catch { /* noop */ }
   }
   // 历史
-  if (g?.getChatHistory) {
-    try {
-      const seq = e?.seq ?? e?.message_id ?? e?.source?.seq ?? undefined
-      const msgs = await g.getChatHistory(seq, historyCount)
-      const lines = formatHistory(msgs, e)
-      if (lines.length) parts.push(`${isFirst ? '入群近期对话' : '久未发言后的近期对话'}：\n${lines.join('\n')}`)
-    } catch { /* noop */ }
-  }
+  const lines = await fetchGroupHistoryLines({ e, bot, groupId: gid, count: historyCount })
+  if (lines.length) parts.push(`${isFirst ? '入群近期对话' : '久未发言后的近期对话'}：\n${lines.join('\n')}`)
   // 标记已感知
   try { await kv.set(`${MET_PREFIX}${gid}`, { at: now }) } catch { /* noop */ }
   if (!parts.length) return null
@@ -147,13 +152,27 @@ async function recentHistory({ ctx, e, kv, bot, historyCount }) {
  * 构建情境感知文本（每轮注入 system prompt）。
  * @returns {Promise<string|null>}
  */
-export async function buildSituationalContext({ ctx, runtime, e, kv, cfg, bot, historyCount = 15 } = {}) {
+export async function buildSituationalContext({ ctx, runtime, e, kv, cfg, bot, historyCount = 15, sessionLen } = {}) {
   const parts = []
   parts.push(`【当前时间】${nowStr()}`)
   if (ctx?.isGroup) parts.push(`【发言者】${roleLabel(ctx)}（${ctx.userId}）。权限：${ctx.isMaster ? '可执行敏感指令' : '普通对话与查询类工具'}`)
   parts.push(selfStatus(runtime, cfg))
   const hist = await recentHistory({ ctx, e, kv, bot: bot || ctx?.bot, historyCount }).catch(() => null)
-  if (hist) parts.push(hist)
+  if (hist) {
+    parts.push(hist)
+  } else {
+    // 会话上下文稀薄（新会话 / 历史很少）时主动补一小段近期群聊，避免模型对群内近况一无所知。
+    // 与 recentHistory 互斥：刚做过入群/久离补课就不再重复注入。
+    // 可用 cfg.perception.sparseInject=false 关闭，cfg.perception.sparseThreshold 调阈值（默认 6 条）。
+    const sparseThreshold = cfg?.perception?.sparseThreshold ?? 6
+    const sparseEnabled = cfg?.perception?.sparseInject !== false
+    if (sparseEnabled && ctx?.isGroup && ctx?.groupId && Number.isFinite(sessionLen) && sessionLen < sparseThreshold) {
+      const lines = await fetchGroupHistoryLines({ e, bot: bot || ctx?.bot, groupId: ctx.groupId, count: historyCount }).catch(() => [])
+      if (lines.length) {
+        parts.push(`【近期群聊补全】当前会话上下文较少，以下是群内最近对话（如仍不够，可调用 get_chat_history 工具拉取更多）：\n${lines.join('\n')}`)
+      }
+    }
+  }
   return parts.join('\n')
 }
 

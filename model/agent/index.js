@@ -9,7 +9,7 @@
  *   import { presets as openaiPresets } from '../../model/openai/index.js'
  *
  *   const provider = createProvider({ protocol:'openai', ...openaiPresets.deepseek, apiKey, model:'deepseek-v4-pro' })
- *   const tools = new ToolRegistry().register(weatherTool).register(createMemoryTool(memory))
+ *   const tools = new ToolRegistry().register(createMemoryTool(memory))
  *   const agent = new Agent({ provider, model:'deepseek-v4-pro', tools, memory, systemPrompt, maxTurns:50 })
  *   const { content } = await agent.run('北京天气？', { onDelta: s => reply(s) })
  */
@@ -21,7 +21,7 @@ export { createProvider, Provider, mapToolChoice, toolsToList } from './provider
 export { OpenAIProvider } from './provider/openai.js'
 export { AnthropicProvider, toAnthropicMessages } from './provider/anthropic.js'
 
-export { ToolRegistry, ExecutionContext, weatherTool, makeFailingTool, webSearchTool, ddgSearch, parseDDG, stripHtml, noteTools, clarifyTool, CLARIFY_TOOL_NAME } from './tools/index.js'
+export { ToolRegistry, ExecutionContext, ddgSearch, parseDDG, stripHtml, noteTools, clarifyTool, CLARIFY_TOOL_NAME } from './tools/index.js'
 
 export { MemoryStore, MemoryLimitError, createMemoryTool, makeRecallTool } from './memory/index.js'
 

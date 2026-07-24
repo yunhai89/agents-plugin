@@ -1,6 +1,8 @@
 /**
- * web 工具 —— DuckDuckGo Lite 抓取（零 API key）。对应 yunhai lib/agent/tools/web.js + tavily.js 的 DDG 回退。
- * fetcher 可注入（ctx.fetcher）便于离线测试；无则用 globalThis.fetch。
+ * DuckDuckGo Lite 搜索底层实现（零 API key）——供 model/search/providers/ddg.js 复用。
+ * 注：原 `webSearchTool`（name=web_search）已移除，避免与 model/search/tools.js 的多源版 web_search 重名
+ * （误注册会静默覆盖多源版）。多源版已含 DDG 兜底，本文件只保留 ddgSearch/parseDDG/stripHtml/decodeDDG。
+ * fetcher 可注入便于离线测试；无则用 globalThis.fetch。
  */
 
 export function stripHtml(s) {
@@ -47,20 +49,4 @@ export async function ddgSearch(query, { limit = 5, fetcher, fetchOpts } = {}) {
   const res = await f(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (agents-plugin)' }, ...fetchOpts })
   const html = await res.text()
   return parseDDG(html, limit)
-}
-
-export const webSearchTool = {
-  name: 'web_search',
-  description: '联网搜索（DuckDuckGo，无需 API key）。输入查询词，返回若干条结果（标题/链接/摘要）。何时用：需要超出你知识范围、或需要实时/最新信息时（天气/新闻/价格/版本等）。优先权威一手来源。',
-  category: 'query',
-  meta: { summary: '联网搜索获取实时信息' },
-  parameters: {
-    type: 'object',
-    properties: { query: { type: 'string', description: '搜索关键词' } },
-    required: ['query'],
-  },
-  async execute(params, ctx) {
-    const results = await ddgSearch(params.query, { fetcher: ctx?.fetcher })
-    return results
-  },
 }

@@ -14,13 +14,15 @@ import {
   groupSetCardTool, groupSetTitleTool, groupSetAdminTool, groupSetNameTool,
   groupManageTools,
 } from './manage.js'
+import { chatHistoryTool, groupHistoryTools } from './history.js'
 
 /** 经 toolkit.defineToolPack 包装的统一工具包（带 group 命名空间，可选） */
-export const groupTools = [...groupInfoTools, ...groupManageTools]
+export const groupTools = [...groupInfoTools, ...groupManageTools, ...groupHistoryTools]
 
 export {
   groupInfoTool, groupMemberTool, groupMembersTool, userInfoTool, groupInfoTools,
   groupKickTool, groupMuteTool, groupMuteAllTool,
   groupSetCardTool, groupSetTitleTool, groupSetAdminTool, groupSetNameTool,
   groupManageTools,
+  chatHistoryTool, groupHistoryTools,
 }

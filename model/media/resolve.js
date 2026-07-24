@@ -107,6 +107,29 @@ export function truncateText(buf, maxChars = 12000) {
   return `${s.slice(0, maxChars)}\n…[已截断，共 ${s.length} 字符]`
 }
 
+/** http(s) 取字节：带超时 + 1 次重试。CDN 抖动/慢响应时裸 fetch 会偶发失败被上层静默吞掉，
+ *  导致整张图丢失；这里对超时/网络类错误重试一次，4xx 等非瞬态错误不重试。 */
+async function httpToBuffer(fetchFn, url, { timeout = 30000, retries = 1 } = {}) {
+  let lastErr
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const opts = { headers: { 'User-Agent': 'Mozilla/5.0 (agents-plugin)' } }
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        opts.signal = AbortSignal.timeout(timeout)
+      }
+      const res = await fetchFn(url, opts)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return Buffer.from(await res.arrayBuffer())
+    } catch (err) {
+      lastErr = err
+      const transient = err?.name === 'AbortError'
+        || /timeout|fetch failed|ECONN|ETIMEDOUT|EAI_|socket hang up|network/i.test(err?.message || '')
+      if (!transient) break
+    }
+  }
+  throw lastErr || new Error('http fetch failed')
+}
+
 /** 从 base64://、http(s)://、file://、裸路径等多种来源取 Buffer */
 async function toBuffer(source, { bot, fetcher }) {
   if (Buffer.isBuffer(source)) return source
@@ -118,10 +141,7 @@ async function toBuffer(source, { bot, fetcher }) {
   if (source.startsWith('base64://')) return Buffer.from(source.slice(9), 'base64')
   if (/^https?:\/\//i.test(source)) {
     const f = fetcher || globalThis.fetch
-    if (f) {
-      const res = await f(source, { headers: { 'User-Agent': 'Mozilla/5.0 (agents-plugin)' } })
-      return Buffer.from(await res.arrayBuffer())
-    }
+    if (f) return await httpToBuffer(f, source)
   }
   // 本地路径（get_image/get_file/get_record 返回的 NapCat 本地路径；同机部署可直接读）
   const localPath = source.startsWith('file://') ? source.slice(7) : source
@@ -149,11 +169,18 @@ async function napcatBytes(mf, e, { bot, fetcher, log }) {
   const sendApi = e?.bot?.sendApi
   if (typeof sendApi !== 'function') return null
   const seg = mf.segment || {}
+  // 回填直链：引用/历史消息段常常本就没有 url（NapCat get_msg 取回的引用消息尤甚）。
+  // 这里只要 napcat 给出了一个 http 直链，就写回 mf.url —— 哪怕最终字节仍取不到，
+  // 上层 describeImages 也能把这个地址交给主模型/MCP，不再"没有图片可看"。
+  const rememberUrl = (u) => {
+    if (typeof u === 'string' && /^https?:\/\//i.test(u)) mf.url = mf.url || u
+  }
   try {
     // 文件类（file_id）→ get_file 返回 base64 / url（base64 不依赖共享文件系统，最稳）
     const fileId = seg.file_id || mf.fid
     if (fileId) {
       const r = await sendApi('get_file', { file_id: fileId })
+      rememberUrl(pickField(r, 'url'))
       const b64 = pickField(r, 'base64')
       if (b64) return Buffer.from(b64, 'base64')
       const url = pickField(r, 'url')
@@ -166,6 +193,7 @@ async function napcatBytes(mf, e, { bot, fetcher, log }) {
       const params = action === 'get_record' ? { file, out_format: 'mp3' } : { file }
       const r = await sendApi(action, params)
       const target = pickField(r, 'url', 'file')
+      rememberUrl(target)
       if (target) { const b = await toBuffer(target, { bot, fetcher }); if (b) return b }
     }
   } catch (err) {

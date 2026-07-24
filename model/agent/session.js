@@ -36,6 +36,19 @@ export class SessionStore {
     return this.get(k)
   }
 
+  /**
+   * 取当前会话历史条数（只读，复用缓存）。供 perception 判断"会话上下文是否稀薄"
+   * —— 内部封装 conversation / group:user 两种模式的取数逻辑，调用方无需关心键构造。
+   */
+  async historyLength({ userId, groupId, conversationId } = {}) {
+    try {
+      if (conversationId != null && typeof this.getConversation === 'function') {
+        return (await this.getConversation(userId, conversationId)).length
+      }
+      return (await this.get(this.key(groupId, userId))).length
+    } catch { return 0 }
+  }
+
   async append(k, msgs) {
     if (!msgs || !msgs.length) return this.get(k)
     const cur = await this.get(k)
