@@ -83,6 +83,32 @@ const PROGRESS_LABELS = {
   miyoushe_search: '🎮 查米游社',
 }
 
+/** 从工具调用参数提取关键信息，给进度消息加上下文（让用户知道在干什么，而非只看到工具名） */
+function extractArgHint(args, name) {
+  let a = args
+  if (typeof a === 'string') { try { a = JSON.parse(a) } catch { return null } }
+  if (!a || typeof a !== 'object') return null
+  const fields = {
+    web_search: 'query', miyoushe_search: 'keyword', memory_search: 'query',
+    calculate: 'code', terminal: 'command', create_excel: 'filename',
+    read_pdf: 'path', read_excel: 'path', transcribe_media: 'path',
+    send_file: 'path', get_chat_history: 'count', get_group_file: 'name',
+    group_member: 'userId', group_info: 'groupId',
+  }
+  const field = fields[name]
+  if (field && a[field] != null) {
+    let v = String(a[field]).trim()
+    if (name === 'calculate') v = v.split('\n')[0]
+    if (name === 'terminal') v = v.split(/[;&|]/)[0].trim()
+    if (field === 'path') v = v.split('/').pop()
+    return v.slice(0, 40)
+  }
+  for (const v of Object.values(a)) {
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 40)
+  }
+  return null
+}
+
 /**
  * 构造进度反馈回调集合。
  * @param {object} e Yunzai 事件
@@ -108,8 +134,9 @@ function makeReplyStream(e, { progress = true, recall = 3 } = {}) {
       lastTool = name
       count++
       const label = PROGRESS_LABELS[name] || `🔧 调用 ${name}`
-      // recallMsg：支持的适配器会在 N 秒后自动撤回进度消息，保持聊天干净；不支持则忽略（agent.progressRecall，默认 3）
-      try { e.reply(`${label}…`, false, { recallMsg: recall }) } catch { /* noop */ }
+      const hint = extractArgHint(tc?.arguments, name)
+      const msg = hint ? `${label}：${hint}` : `${label}…`
+      try { e.reply(msg, false, { recallMsg: recall }) } catch { /* noop */ }
     },
   }
 }
