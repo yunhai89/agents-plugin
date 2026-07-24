@@ -402,6 +402,57 @@ utils/       Config 配置读写（插件目录 + 热加载） · Log 分级日�
 
 分级日志（`utils/Log.js`）：`mark`（里程碑）/ `info`（研究进度）/ `debug`（工具入参·每轮 token）/ `warn` / `error`。开启 `debug: true` 可看到 AI 每次调用工具的名称、入参、结果与每轮 token 用量，深度研究的迭代轮次与搜索词，便于排查。
 
+### 日志字段说明
+
+一次典型对话会在控制台打出五行 `mark` 日志，各字段含义如下（以实际输出为例）：
+
+```
+[trigger] user=3891977697 gid=960179589 mode=at inputLen=83
+[chat]    user=3891977697 gid=960179589 conv=3 model=mimo-v2.5-pro persona=default vision=off ctx=1116字
+[agent]   run start ... inputLen=83 msgs=21 tools=39 maxTurns=50
+[agent]   run end turns=1 stop=stop usage={in:14816,out:808} replyLen=1098 totalMs=19188
+[chat]    reply turns=1 stop=stop usage=in:14816/out:808 replyLen=1098
+```
+
+**`[trigger]`** —— 收到消息、判定触发方式时：
+
+| 字段 | 含义 |
+| --- | --- |
+| `user` | 触发者 QQ |
+| `gid` | 群号（私聊显示 `-`） |
+| `mode` | 触发方式：`at`（艾特）/ `cmd`（触发词命令） |
+| `inputLen` | 用户输入字符数 |
+
+**`[chat]`** —— 单轮装配完成、调模型前（本轮上下文快照）：
+
+| 字段 | 含义 |
+| --- | --- |
+| `conv` | 会话 id（`#进入聊天` / `#new` 切换；隔离多轮历史） |
+| `model` | 当前主模型 id |
+| `persona` | 当前人设 id（`default` = 内置默认身份） |
+| `vision` | 主模型视觉能力：`on` = 直发原图 / `off` = 走视觉子模型图转文 |
+| `ctx` | 注入 system 的「情境感知」文本长度（字）：含时间/发言者/自我状态/近期群聊等；为空则不显示 |
+
+**`[agent] run start`** —— ReAct 主循环开始：
+
+| 字段 | 含义 |
+| --- | --- |
+| `msgs` | 发给模型的历史消息条数（会话窗口裁剪后，含本轮 user） |
+| `tools` | 注册给模型的工具总数（内置 + 自定义 + MCP） |
+| `maxTurns` | 工具调用轮次预算上限（`agent.maxTurns`，默认 50） |
+
+**`[agent] run end` / `[chat] reply`** —— 循环结束 / 回复发出后：
+
+| 字段 | 含义 |
+| --- | --- |
+| `turns` | 实际执行的模型轮次数（`1` = 一次性回复，未调工具） |
+| `stop` | 终止原因：`stop`/`end_turn` = 正常回复结束；`clarify` = 澄清短路退出；`max_turns` = 轮次耗尽；`blocked` = 被注入防御拦截 |
+| `usage` | token 用量：`run end` 的 `{in,out}` 与 `reply` 的 `in:../out:..` 是同一份累计值（多轮累加） |
+| `replyLen` | 最终回复字符数 |
+| `totalMs` | 本轮总耗时（毫秒），仅 `run end` 有 |
+
+> **排查要点**：`turns` 很大 / `stop=max_turns` → 多步任务卡住或工具反复失败；`usage.in` 持续偏高 → 上下文/记忆膨胀，考虑设 `contextWindow` 开压缩；`ctx` 字数 → 判断情境注入量是否过大。
+
 **MCP 连不上时先看报错措辞**：`request timeout: initialize` = 服务端进程起来了但没在超时内响应握手（npx 首次下载慢 / 网络不通 / 命令错误）；`ENOENT spawn npx` / `进程退出码-2` = 容器里压根没有 npx（精简 Docker 镜像常见）—— 解决方案见上文 `agent.mcp` 章节的 ⚠️ 说明；`进程退出码 N` + stderr = 服务端启动即崩溃（缺 API Key / 依赖 / Node 版本，看 stderr 末尾）。
 
 ---

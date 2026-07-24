@@ -513,7 +513,7 @@ export class Chat extends plugin {
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
       })
-      const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? '-'}` : '-'
+      const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
       const suffix = stopReason === 'max_turns' ? '（已达工具调用上限）' : ''
       // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
