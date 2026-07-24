@@ -124,7 +124,7 @@ function splitSegments(cmd) {
 export function makeTerminalTool() {
   return {
     name: 'terminal',
-    description: '在主机执行终端(shell)命令。只读安全命令（ls/cat/grep/git status 等，见 allowlist）免审批直接执行；写操作/未知命令需主人 #确认/#拒绝（框架强制，不可绕过）；灾难性命令（rm -rf / 等）黑名单硬拦。用于安装软件、文件操作、运行脚本等。返回 exitCode/stdout/stderr。',
+    description: '在主机执行终端(shell)命令。只读安全命令（ls/cat/grep/git status 等，见 allowlist）免审批直接执行；写操作/未知命令需主人 #确认/#拒绝（框架强制，不可绕过）；灾难性命令（rm -rf / 等）黑名单硬拦。用于安装软件、文件操作、运行脚本等。注意：不要用终端查看插件自身结构（技能/工具/配置等已在系统提示中列出）。返回 exitCode/stdout/stderr。',
     category: 'system',
     meta: {
       interactive: true,
