@@ -21,6 +21,7 @@ agent:
   reflect: auto             # 自我反思/自纠：off=关 | auto=仅多轮/用工具时(默认) | always=每次最终回复都反思
   reflectMaxIterations: 1   # 反思回环修正最大次数（封顶防无限循环）
   progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
+  progressRecall: 3         # 进度消息多少秒后自动撤回（默认 3；适配器不支持则忽略）
   reply:
     mode: image             # 回复渲染：image（markdown→精美浅色图片，默认）/ text（纯文本）；渲染失败自动退文本
     atSender: true          # 群聊回复时艾特发言人（私聊不艾特）
@@ -32,6 +33,7 @@ agent:
   confirmTimeout: 300
   guardAction: flag
   guardSensitivity: medium
+  redactSecrets: true          # 发送前脱敏：屏蔽回复中的 API Key/token 等敏感信息（默认开）
   policy:
     categoryMin:
   media:

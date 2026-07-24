@@ -38,6 +38,7 @@ import { createSearchManager, makeSearchTools } from '../model/search/index.js'
 import { PersonaStore, PersonaService } from '../model/persona/index.js'
 import { VisionService, describeImages } from '../model/vision/index.js'
 import { getStickerManager } from '../model/sticker/manager.js'
+import { redactSecrets } from '../model/agent/redact.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
@@ -83,7 +84,7 @@ const PROGRESS_LABELS = {
  * @param {object} e Yunzai 事件
  * @param {object} opts { progress:bool }
  */
-function makeReplyStream(e, { progress = true } = {}) {
+function makeReplyStream(e, { progress = true, recall = 3 } = {}) {
   if (!progress) return {}
   let lastAt = 0
   let lastTool = null
@@ -103,8 +104,8 @@ function makeReplyStream(e, { progress = true } = {}) {
       lastTool = name
       count++
       const label = PROGRESS_LABELS[name] || `🔧 调用 ${name}`
-      // recallMsg: 支持的适配器会在 60s 后自动撤回进度消息，保持聊天干净；不支持则忽略
-      try { e.reply(`${label}…`, false, { recallMsg: 60 }) } catch { /* noop */ }
+      // recallMsg：支持的适配器会在 N 秒后自动撤回进度消息，保持聊天干净；不支持则忽略（agent.progressRecall，默认 3）
+      try { e.reply(`${label}…`, false, { recallMsg: recall }) } catch { /* noop */ }
     },
   }
 }
@@ -123,6 +124,7 @@ function makeReplyStream(e, { progress = true } = {}) {
  */
 
 let _runtime = null
+let _runtimePromise = null // in-flight buildRuntime()，并发安全：多调用方共享同一次构建
 const _clearPending = new Map() // userId → 确认清空的时间戳（2 步确认）
 
 function getKv() {
@@ -293,13 +295,22 @@ async function buildRuntime() {
 }
 
 async function getRuntime() {
-  if (!_runtime) _runtime = await buildRuntime()
-  return _runtime
+  if (_runtime) return _runtime
+  // 并发安全：启动期各 apps 构造器 / 首条消息可能并发调 getRuntime，
+  // 复用同一个 in-flight buildRuntime()，避免运行时被构建多次（否则 MCP 会重复连接注册、日志打两遍）。
+  if (!_runtimePromise) {
+    _runtimePromise = buildRuntime()
+      .then((rt) => { _runtime = rt; return rt })
+      .catch((e) => { _runtimePromise = null; throw e })
+      .finally(() => { _runtimePromise = null })
+  }
+  return _runtimePromise
 }
 
 /** 失效运行时单例（下一次 getRuntime 用新配置重建） */
 function invalidateRuntime() {
   _runtime = null
+  _runtimePromise = null
 }
 
 // 热加载：配置文件变更 → 失效运行时单例，下次对话用新配置重建（无需重启框架）
@@ -524,7 +535,7 @@ export class Chat extends plugin {
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
     if (wantProgress) await this.e.reply('思考中…')
-    const rs = makeReplyStream(this.e, { progress: wantProgress })
+    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3 })
     try {
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
@@ -533,24 +544,26 @@ export class Chat extends plugin {
       })
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
+      // 发送前脱敏：屏蔽 API Key / token 等敏感信息（agent.redactSecrets 默认开；异常不阻塞回复）
+      const body = cfg.redactSecrets === false ? (content || '') : redactSecrets(content || '')
       const suffix = stopReason === 'max_turns' ? '（已达工具调用上限）' : ''
       // 表情包：本轮一次性门控（决定带哪些图 + 记冷却/防连发/usage），图片/文本模式共用结果，避免双计
-      const acceptMap = (rt.sticker && content) ? rt.sticker.decide(content, ctx) : null
+      const acceptMap = (rt.sticker && body) ? rt.sticker.decide(body, ctx) : null
       // 群聊回复艾特发言人（agent.reply.atSender，默认开；私聊不艾特）
       const atSender = (ctx.isGroup && cfg.reply?.atSender !== false && ctx.userId && typeof segment !== 'undefined') ? segment.at(ctx.userId) : null
       // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
       const replyMode = cfg.reply?.mode || 'image'
       let delivered = false
-      if (replyMode === 'image' && content) {
+      if (replyMode === 'image' && body) {
         try {
-          const sc = acceptMap ? rt.sticker.applyImage(content, acceptMap) : content
+          const sc = acceptMap ? rt.sticker.applyImage(body, acceptMap) : body
           const img = await renderReplyImage(sc)
           if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }
       if (!delivered) {
         // 文本模式（或图片渲染失败）：表情包混排（无图→纯文本；有图→segment 数组）
-        const seg = acceptMap ? rt.sticker.applyText(content, acceptMap) : (content || '(无回复)')
+        const seg = acceptMap ? rt.sticker.applyText(body, acceptMap) : (body || '(无回复)')
         if (typeof seg === 'string') {
           const txt = `${seg}${suffix ? `\n${suffix}` : ''}`
           await this.e.reply(atSender ? [atSender, txt] : txt)
@@ -567,7 +580,7 @@ export class Chat extends plugin {
       }
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
-      await this.e.reply(`失败：${e?.message || e}`)
+      await this.e.reply(redactSecrets(`失败：${e?.message || e}`))
     }
     return true
   }

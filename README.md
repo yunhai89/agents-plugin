@@ -159,6 +159,7 @@ agent:
 | `keepReasoning` | `false` | 是否把推理(`reasoning_content`)回灌历史；默认 `false` 省 context |
 | `stream` | `false` | 逐字流式输出（依赖适配器、不稳，默认关） |
 | `progress` | `true` | 工具调用时推送节流进度消息（消除"干等"，默认开） |
+| `progressRecall` | `3` | 进度消息多少秒后自动撤回（适配器不支持则忽略） |
 | `reply.mode` | `image` | 回复渲染：`image`（markdown→浅色图片，默认）/ `text`（纯文本） |
 | `reply.atSender` | `true` | 群聊回复时艾特发言人（私聊不艾特） |
 | `thinking` | 空 | 思考模式，如 `{ type: "enabled", budget_tokens: 16000 }` |
@@ -170,6 +171,7 @@ agent:
 | `confirmTimeout` | `300` | 审批超时自动拒绝（秒） |
 | `guardAction` | `flag` | 注入防御动作：`block`(拦截)/`flag`(隔离标注)/`sanitize`(脱敏) |
 | `guardSensitivity` | `medium` | 防御灵敏度：`low`(0.95)/`medium`(0.7)/`high`(0.5) |
+| `redactSecrets` | `true` | 发送前脱敏：屏蔽回复中的 API Key / token 等敏感信息 |
 
 ### `agent.policy` —— RBAC 策略
 
