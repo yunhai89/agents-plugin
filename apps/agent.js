@@ -249,6 +249,8 @@ async function buildRuntime() {
     contextPressureThreshold: cfg.contextPressureThreshold ?? (cfg.contextWindow ? Math.floor(cfg.contextWindow * 0.8) : null),
     maxToolResultChars: cfg.maxToolResultChars ?? 4000,
     keepReasoning: cfg.keepReasoning === true,
+    reflect: cfg.reflect ?? 'auto',
+    reflectMaxIterations: cfg.reflectMaxIterations ?? 1,
     logger: Log.tag('agent'),
   })
 

@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import { ExecutionContext } from './tools/context.js'
 import { stringifyArgs, estimateMessages, mergeUsage } from './messages.js'
-import { TEMPLATES, SERVICE_DIRECTIVE, buildToolCatalogSection, buildSkillsPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
+import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildSkillsPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
 
 const DEFAULT_IDENTITY = TEMPLATES.agent.system
 
@@ -81,6 +81,9 @@ export class Agent {
     this.recallTopK = config.recallTopK ?? 5
     this.recallLlm = config.recallLlm || null
     this.shortCircuitTools = config.shortCircuitTools || ['clarify']
+    // 自我反思/自纠：最终回复交付前自检，发现实质问题则回环修正。off=关 | auto=仅多轮/用工具时(默认) | always=每次都反思
+    this.reflect = config.reflect ?? 'auto'
+    this.reflectMaxIterations = config.reflectMaxIterations ?? 1
 
     this.messages = []
   }
@@ -152,6 +155,8 @@ export class Agent {
     let turns = 0
     let stopReason = null
     let lastContent = ''
+    let usedTools = false      // 本轮是否调用过工具（auto 门控：仅非平凡任务触发反思，纯闲聊零延迟）
+    let reflectIter = 0        // 已触发的反思回环次数（reflectMaxIterations 封顶，防无限循环）
     const toolList = this.tools?.list?.() || []
     const __runStart = Date.now()
     this.logger('mark', 'run start user=', ctx?.userId, 'gid=', ctx?.groupId, 'conv=', ctx?.conversationId, 'inputLen=', rawText.length, 'msgs=', this.messages.length, 'tools=', toolList.length, 'maxTurns=', this.maxTurns)
@@ -208,6 +213,21 @@ export class Agent {
       lastContent = result.content || lastContent
 
       if (!result.toolCalls?.length) {
+        // 反思门：交付前自检，发现实质问题则回环修正（自我纠正）
+        if (reflectIter < this.reflectMaxIterations && this._shouldReflect(usedTools, turns)) {
+          const verdict = await this._reflect({ system, signal }).catch((e) => {
+            this.logger('warn', '[reflect] 自检异常，跳过（直接交付）', e?.message || e)
+            return null
+          })
+          reflectIter++
+          if (verdict?.usage) usage = mergeUsage(usage, verdict.usage)
+          if (verdict?.revise) {
+            this.logger('mark', `[reflect] 自检发现需修正：${verdict.feedback || ''}——回环重做`)
+            this.messages.push({ role: 'user', content: `【自检反馈】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` })
+            continue
+          }
+          this.logger('debug', '[reflect] 自检通过，照常交付')
+        }
         stopReason = result.finishReason || 'end_turn'
         break
       }
@@ -215,6 +235,7 @@ export class Agent {
       // 执行工具
       const execCtx = new ExecutionContext({ agent: this, taskId, messages: this.messages, signal, logger: this.logger, props: { ctx } })
       const toolResults = await this._executeToolCalls(result.toolCalls, execCtx, cb, ctx)
+      usedTools = true
       for (const trm of toolResults) this.messages.push(trm)
 
       // clarify 短路：指定工具的结果作为最终回复
@@ -451,6 +472,40 @@ export class Agent {
     }
     cb.onToolEnd?.(tc, content)
     return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
+  }
+
+  /** 反思门控：off→不反思；always→每次最终回复都反思；auto→仅在本轮用过工具或多步时反思（纯闲聊零延迟） */
+  _shouldReflect(usedTools, turns) {
+    const mode = this.reflect
+    if (!mode || mode === 'off') return false
+    if (mode === 'always') return true
+    return !!(usedTools || turns > 1) // 'auto'
+  }
+
+  /**
+   * 交付前自检：在消息快照上做一次评判调用（不污染主 messages），返回 {revise, feedback, usage}。
+   * revise=true 表示发现实质问题、需回环修正。任何异常/解析失败一律返回 revise=false，绝不阻塞主流程。
+   * 草拟回复已是 this.messages 末尾的 assistant 消息，评判者据此核查完整性/准确性/一致性。
+   */
+  async _reflect({ system, signal } = {}) {
+    const reflectSystem = system ? `${system}\n\n${REFLECTION_DIRECTIVE}` : REFLECTION_DIRECTIVE
+    const messages = [...this.messages, { role: 'user', content: '请对上面你草拟的最终回复做交付前自检，并按指定 JSON 格式给出结论。' }]
+    const res = await this.provider.chat({
+      model: this.model,
+      messages,
+      system: reflectSystem,
+      tools: undefined, // 纯评判，不带工具
+      temperature: this.temperature,
+      max_tokens: this.maxTokens,
+      thinking: this.thinking,
+      signal,
+      stream: false,
+    })
+    const text = (res?.content || '').trim()
+    const m = text.match(/\{\s*"revise"\s*:\s*(true|false)\s*\}/i)
+    if (!m || !/true/i.test(m[1])) return { revise: false, usage: res?.usage || null }
+    const feedback = text.slice(text.indexOf('}') + 1).trim() || '草拟回复存在未达标之处'
+    return { revise: true, feedback, usage: res?.usage || null }
   }
 
   /** 工具结果字符封顶：优先用工具自带 meta.resultCap（按类分级），否则回落全局 maxToolResultChars */

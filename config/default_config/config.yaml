@@ -18,6 +18,8 @@ agent:
   maxToolResultChars: 8000  # 单条工具结果字符上限（内容获取类工具可经 meta.resultCap 单独放宽到 12000）
   keepReasoning: false      # 是否把推理(reasoning_content)回灌历史（默认 false 省 context）
   stream: false             # 逐字流式输出（依赖适配器、不稳，默认关）
+  reflect: auto             # 自我反思/自纠：off=关 | auto=仅多轮/用工具时(默认) | always=每次最终回复都反思
+  reflectMaxIterations: 1   # 反思回环修正最大次数（封顶防无限循环）
   progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
   reply:
     mode: image             # 回复渲染：image（markdown→精美浅色图片，默认）/ text（纯文本）；渲染失败自动退文本
