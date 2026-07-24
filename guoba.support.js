@@ -122,6 +122,7 @@ export function supportGuoba() {
         { field: 'agent.progressRecall', label: '进度消息撤回(秒)', bottomHelpMessage: 'N 秒后自动撤回进度消息；0=不撤回；适配器不支持则忽略', component: 'InputNumber', componentProps: { min: 0, max: 120 } },
         { field: 'agent.reply.mode', label: '回复渲染方式', component: 'Select', componentProps: { options: [{ label: '图片（markdown→精美浅色图，默认）', value: 'image' }, { label: '纯文本', value: 'text' }] } },
         { field: 'agent.reply.narrate', label: '中途播报', bottomHelpMessage: '模型调工具时附带的思路/进展自动转发给用户（别埋头苦干）；默认开', component: 'Switch' },
+        { field: 'agent.reply.renderScale', label: '回复图清晰度倍率', bottomHelpMessage: 'deviceScaleFactor：2=高清（默认），1=普通；越大越清晰但越耗内存', component: 'InputNumber', componentProps: { min: 1, max: 4 } },
 
         // —— 深度思考 ——
         { label: '深度思考（Thinking）', component: 'SOFT_GROUP_BEGIN' },

@@ -565,7 +565,7 @@ export class Chat extends plugin {
       if (replyMode === 'image' && body) {
         try {
           const sc = acceptMap ? rt.sticker.applyImage(body, acceptMap) : body
-          const img = await renderReplyImage(sc)
+          const img = await renderReplyImage(sc, { scale: cfg.reply?.renderScale ?? 2 })
           if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }

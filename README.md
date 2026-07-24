@@ -163,6 +163,7 @@ agent:
 | `reply.mode` | `image` | 回复渲染：`image`（markdown→浅色图片，默认）/ `text`（纯文本） |
 | `reply.atSender` | `true` | 群聊回复时艾特发言人（私聊不艾特） |
 | `reply.narrate` | `true` | 中途播报：模型调工具时附带的思路/进展文本自动转发给用户（参考 OpenClaw） |
+| `reply.renderScale` | `2` | 回复图片渲染倍率（deviceScaleFactor，2=高清；越大越清晰但越耗内存/体积） |
 | `thinking` | 空 | 思考模式，如 `{ type: "enabled", budget_tokens: 16000 }` |
 | `memoryLimits` | 空 | 声明式记忆字符上限，如 `{ memory: 2200, user: 1375 }` |
 | `systemPrompt` | 空 | 默认身份 system prompt（留空用富默认身份；被人设覆盖时失效） |

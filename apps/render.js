@@ -54,22 +54,47 @@ export async function screenshot(name, html) {
  * 把一段文本（markdown）渲染成回复图片（segment.image），失败返回 null。
  * markdown→HTML 用 marked+highlight.js（依赖缺失时自动降级为简易渲染）；截图经 Yunzai 渲染器。
  */
-export async function renderReplyImage(content) {
+export async function renderReplyImage(content, { scale = 2 } = {}) {
   try {
     const bodyHtml = await mdToHtml(content)
     const html = buildHtml({ bodyHtml })
-    let img = await screenshot('agents-plugin/reply', html)
-    if (!img) {
-      // puppeteer 偶发失败（并发/内存/超时/长内容）——重试一次
-      Log.warn('[render] 首次截图失败，重试中…')
-      img = await screenshot('agents-plugin/reply', html)
-    }
+    // 主路径：独立 puppeteer 高清渲染（dsf 2 + JPEG q95，清晰度远超 Yunzai dsf 1）
+    let img = await renderHighQuality(html, { scale })
+    if (img) return img
+    // 降级 1：Yunzai 渲染器（dsf 1，但总比文本好）
+    Log.warn('[render] 独立浏览器渲染失败，降级 Yunzai 渲染器…')
+    img = await screenshot('agents-plugin/reply', html)
+    if (img) return img
+    // 降级 2：Yunzai 重试
+    Log.warn('[render] Yunzai 首次截图失败，重试中…')
+    img = await screenshot('agents-plugin/reply', html)
     if (!img) Log.warn('[render] 重试仍失败，将回退文本')
     return img
   } catch (e) {
     Log.warn('[render] renderReplyImage 异常', e?.message || e)
     return null
   }
+}
+
+/**
+ * 独立 puppeteer 高清渲染（不经 Yunzai 渲染器，可控制 deviceScaleFactor）。
+ * 用 getBrowser 懒加载单例浏览器，setContent 内联 HTML（base64 图片直接加载，无 file://），
+ * setViewport deviceScaleFactor=N → 物理像素 N 倍 → 清晰度翻倍。
+ * 返回 segment.image（base64），失败 null。
+ */
+async function renderHighQuality(html, { scale = 2, width = 800, imgType = 'jpeg', quality = 95 } = {}) {
+  const buff = await withPage(html, async (page) => {
+    await page.setViewport({ width, height: 1200, deviceScaleFactor: scale })
+    await page.waitForSelector('#container', { timeout: 8000 }).catch(() => {})
+    await new Promise((r) => setTimeout(r, 200)) // 字体/布局/图片稳定
+    const opt = { type: imgType, fullPage: true }
+    if (imgType === 'jpeg') opt.quality = quality
+    return page.screenshot(opt)
+  })
+  if (!buff || !Buffer.isBuffer(buff)) return null
+  const seg = (typeof segment !== 'undefined' && segment) || null
+  if (!seg) return null
+  return seg.image(`base64://${buff.toString('base64')}`)
 }
 
 // ─── 独立 puppeteer 浏览器（懒加载单例，用于 PDF / 高清图）───
@@ -104,6 +129,12 @@ async function withPage(html, fn) {
   let page = null
   try {
     page = await browser.newPage()
+  } catch (e) {
+    // newPage 失败 = 浏览器已死 → reset 让下次重新 launch（自愈）
+    _browser = null
+    return null
+  }
+  try {
     await page.setContent(String(html), { waitUntil: 'load', timeout: 30000 })
     return await fn(page)
   } catch (e) {
