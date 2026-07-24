@@ -46,6 +46,7 @@ import { calcTool } from '../model/calc/index.js'
 import { sendFileTool } from '../model/document/sendfile.js'
 import { readPdfTool } from '../model/document/pdf.js'
 import { createExcelTool, readExcelTool } from '../model/document/excel.js'
+import { transcribeMediaTool } from '../model/document/media_stt.js'
 import { screenshot, renderReplyImage } from './render.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
@@ -218,6 +219,7 @@ async function buildRuntime() {
   tools.register(readPdfTool) // read_pdf：读取 PDF 文本+页面图片
   tools.register(createExcelTool) // create_excel：创建带样式 Excel
   tools.register(readExcelTool) // read_excel：读取 Excel 为表格文本
+  tools.register(transcribeMediaTool) // transcribe_media：音视频转文字(STT)
 
   // skill 工具：模型主动调用 skill 的通道（按 name 加载说明书正文）—— 渐进式披露的载入入口
   tools.register(makeSkillTool(skills))
