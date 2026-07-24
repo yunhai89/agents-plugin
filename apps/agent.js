@@ -543,6 +543,12 @@ export class Chat extends plugin {
         ctx, systemPrompt, context,
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
+        // OpenClaw 式中途播报：模型在调工具时附带的中途文本（思路/进展）实时转发给用户，不丢弃
+        onAssistant: (res) => {
+          if (res?.toolCalls?.length && res?.content && cfg.reply?.narrate !== false) {
+            try { this.e.reply(redactSecrets(res.content)) } catch { /* noop */ }
+          }
+        },
       })
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)

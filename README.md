@@ -48,7 +48,7 @@
 | 🖼️ 图片渲染回复 | markdown → 精美浅色图片（完整语法 + 代码高亮），失败退文本 | ✅ 稳定 |
 | 🔧 工具调用 | ReAct 内核、并行调用、RBAC + 主人审批、工具开发 SDK | ✅ 稳定 |
 | 🧠 长期记忆 | MEMORY.md/USER.md 人可编辑 + `memory_search` 主动召回（参考 OpenClaw） | ✅ 稳定 |
-| 🎭 人设系统 | 内置 5 角色 + 自建，替换身份层不缩水工具/记忆 | ✅ 稳定 |
+| 🎭 人设系统 | 内置 6 角色 + 自建，替换身份层不缩水工具/记忆 | ✅ 稳定 |
 | 🖼️ 多模态识图 | 视觉子模型（主模型无视觉时图转文） | ✅ 稳定 |
 | 🔌 MCP | 完整 MCP 客户端（stdio / HTTP）、多服务端、按工具 RBAC | ✅ 稳定 |
 | 👥 群聊工具 | 群信息 / 群管理 / 米游社搜索 | ✅ 稳定 |
@@ -162,6 +162,7 @@ agent:
 | `progressRecall` | `3` | 进度消息多少秒后自动撤回（适配器不支持则忽略） |
 | `reply.mode` | `image` | 回复渲染：`image`（markdown→浅色图片，默认）/ `text`（纯文本） |
 | `reply.atSender` | `true` | 群聊回复时艾特发言人（私聊不艾特） |
+| `reply.narrate` | `true` | 中途播报：模型调工具时附带的思路/进展文本自动转发给用户（参考 OpenClaw） |
 | `thinking` | 空 | 思考模式，如 `{ type: "enabled", budget_tokens: 16000 }` |
 | `memoryLimits` | 空 | 声明式记忆字符上限，如 `{ memory: 2200, user: 1375 }` |
 | `systemPrompt` | 空 | 默认身份 system prompt（留空用富默认身份；被人设覆盖时失效） |
