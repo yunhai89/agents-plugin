@@ -9,9 +9,8 @@
  */
 
 import { buildUserContent } from '../media/convert.js'
-import { DEFAULT_DESCRIBE } from './index.js'
 
-/** 默认"描述这张图"指令：尽量榨取 OCR / 物体 / 图表 / 关键信息，供下游文本模型使用 */
+/** 默认"描述这张图/视频"指令：尽量榨取 OCR / 物体 / 图表 / 关键信息，供下游文本模型使用 */
 export const DEFAULT_DESCRIBE = [
   '请详细描述这张图片，供一个看不到图的文本 AI 阅读并回答用户问题。要求：',
   '1) 若图中有文字（截图/文档/招牌/字幕），逐字转写（OCR）；',
