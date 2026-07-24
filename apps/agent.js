@@ -43,6 +43,7 @@ import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/inde
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
 import { calcTool } from '../model/calc/index.js'
+import { sendFileTool } from '../model/document/sendfile.js'
 import { screenshot, renderReplyImage } from './render.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
@@ -211,6 +212,7 @@ async function buildRuntime() {
 
   // Python 精确计算工具（数学/统计等；沙箱内执行，默认开）
   if (cfg.calc?.enable !== false) tools.register(calcTool)
+  tools.register(sendFileTool) // send_file：发送文件到聊天
 
   // skill 工具：模型主动调用 skill 的通道（按 name 加载说明书正文）—— 渐进式披露的载入入口
   tools.register(makeSkillTool(skills))
