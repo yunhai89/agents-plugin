@@ -94,6 +94,7 @@ export const miyoushePostTool = {
   name: 'miyoushe_post',
   description: '按帖子ID获取米游社帖子详情（正文/图片/互动数据）。先用 miyoushe_search 拿到 postId，再用本工具读全文。',
   category: 'query',
+  meta: { resultCap: 12000 },
   parameters: {
     type: 'object',
     properties: {

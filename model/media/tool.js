@@ -60,6 +60,7 @@ export const getGroupFileTool = {
   name: 'get_group_file',
   description: '下载并读取群文件内容。按 name（文件名，模糊匹配）或 fid（群文件 id）定位。文本类（txt/md/csv/json/代码/文档等）直接返回内容；图片/二进制返回元信息（当前工具结果不支持内联图片）。',
   category: 'group_manage',
+  meta: { resultCap: 12000 },
   parameters: {
     type: 'object',
     properties: {

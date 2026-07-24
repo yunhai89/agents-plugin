@@ -450,12 +450,12 @@ export class Agent {
       }
     }
     cb.onToolEnd?.(tc, content)
-    return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content) }
+    return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
   }
 
-  /** 工具结果字符封顶：超长截断并附标记，防巨型 JSON 膨胀上下文 */
-  _capToolResult(content) {
-    const max = this.maxToolResultChars
+  /** 工具结果字符封顶：优先用工具自带 meta.resultCap（按类分级），否则回落全局 maxToolResultChars */
+  _capToolResult(content, tool) {
+    const max = tool?.meta?.resultCap ?? this.maxToolResultChars
     if (!max || typeof content !== 'string' || content.length <= max) return content
     return content.slice(0, max) + `\n…(已截断，原文 ${content.length} 字符；如需完整结果请缩小查询范围)`
   }

@@ -33,6 +33,7 @@ export function makeSearchTools(manager, defaults = {}) {
       name: 'web_extract',
       description: '从指定 URL 提取干净的正文内容。输入 URL 列表，返回清洗后的正文。',
       category: 'query',
+      meta: { resultCap: 12000 },
       parameters: {
         type: 'object',
         properties: {

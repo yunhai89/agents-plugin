@@ -11,11 +11,11 @@ agent:
   model: "deepseek-chat"
   reasoningFields: []
   maxTurns: 50
-  temperature:
+  temperature: 0.2  # 工具调用稳定性（建议 0.1~0.3；勿设 0 避免复读式回复）
   thinking:
   maxTokens:              # 单次回复最大 token（留空=厂商默认；Anthropic 默认 4096）
   contextWindow:          # 模型上下文窗口 token 数（如 32000）；超 80% 自动压缩历史、保留首条意图
-  maxToolResultChars: 4000  # 单条工具结果字符上限，超长截断防上下文膨胀
+  maxToolResultChars: 8000  # 单条工具结果字符上限（内容获取类工具可经 meta.resultCap 单独放宽到 12000）
   keepReasoning: false      # 是否把推理(reasoning_content)回灌历史（默认 false 省 context）
   stream: false             # 逐字流式输出（依赖适配器、不稳，默认关）
   progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
