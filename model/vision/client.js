@@ -9,6 +9,7 @@
  */
 
 import { buildUserContent } from '../media/convert.js'
+import { DEFAULT_DESCRIBE } from './index.js'
 
 /** 默认"描述这张图"指令：尽量榨取 OCR / 物体 / 图表 / 关键信息，供下游文本模型使用 */
 export const DEFAULT_DESCRIBE = [
@@ -55,10 +56,43 @@ export class VisionService {
         stream: false,
       })
     } catch (e) {
-      this.logger('warn', `[vision] 识别失败 ${name || ''}：${e?.message || e}`)
+      this.logger('warn', `[vision] 图片识别失败 ${name || ''}：${e?.message || e}`)
       return ''
     }
     const text = (res?.content || '').trim()
     return text
+  }
+
+  /**
+   * 识别视频 → 文本描述（MiMo-V2.5 等支持 video_url 的模型）。
+   * 用 OpenAI 兼容的 video_url 块（base64 data URI）+ 描述指令。
+   * @param {object} video { buffer:Buffer, mime:string, name?:string }
+   * @param {object} opts { question?:string }
+   * @returns {Promise<string>} 描述文本；失败返回空串
+   */
+  async recognizeVideo({ buffer, mime, name } = {}, { question } = {}) {
+    if (!buffer || !mime) return ''
+    const videoUrl = `data:${mime};base64,${buffer.toString('base64')}`
+    const userText = question
+      ? `${DEFAULT_DESCRIBE}\n\n用户想了解：${question}`
+      : DEFAULT_DESCRIBE
+    const content = [
+      { type: 'video_url', video_url: { url: videoUrl }, fps: 2 },
+      { type: 'text', text: userText },
+    ]
+
+    let res
+    try {
+      res = await this.provider.chat({
+        model: this.model,
+        messages: [{ role: 'user', content }],
+        max_tokens: this.maxTokens,
+        stream: false,
+      })
+    } catch (e) {
+      this.logger('warn', `[vision] 视频识别失败 ${name || ''}：${e?.message || e}`)
+      return ''
+    }
+    return (res?.content || '').trim()
   }
 }

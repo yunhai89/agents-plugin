@@ -26,8 +26,30 @@ export async function describeImages(vision, mediaList, question) {
   const out = []
   for (const mf of mediaList) {
     const img = mf.kind === 'image' || isImage(mf.mime)
-    if (!img) { out.push(mf); continue }
+    const vid = mf.kind === 'video' || (mf.mime || '').startsWith('video/')
 
+    if (!img && !vid) { out.push(mf); continue }
+
+    if (vid) {
+      // 视频识别（MiMo-V2.5 等支持 video_url 的模型）
+      const label = mf.name ? `[视频 ${mf.name}]` : '[视频]'
+      const urlPart = mf.url ? `\n（视频直链：${mf.url}）` : ''
+      if (!mf.buffer) {
+        out.push(mf.url ? toTextMedia(mf, `${label}（未能取到视频字节，直链：${mf.url}）`) : mf)
+        continue
+      }
+      let desc = ''
+      try {
+        desc = await vision.recognizeVideo({ buffer: mf.buffer, mime: mf.mime, name: mf.name }, { question })
+      } catch (e) {
+        desc = ''
+      }
+      const text = desc ? `${label}：${desc}${urlPart}` : `${label}（识别失败/为空）${urlPart}`
+      out.push(toTextMedia(mf, text))
+      continue
+    }
+
+    // 图片识别
     const label = mf.name ? `[图片 ${mf.name}]` : '[图片]'
     // 保留图片直链：主模型无视觉时看不到图，但可把此 URL 传给视觉类工具/MCP（如 analyze_image）识别，
     // 否则图片被消耗成纯文本后，用户让它用 MCP 识别时模型手里没有地址可传 → "没有看到图片"。
