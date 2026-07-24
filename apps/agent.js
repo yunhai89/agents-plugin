@@ -20,7 +20,6 @@ import {
   redisKv,
   noteTools,
   clarifyTool,
-  speakTool,
   checkInput,
   systemHardening,
   createPolicy,
@@ -183,7 +182,6 @@ async function buildRuntime() {
     .register(...makeSearchTools(searchManager)) // web_search（多源）+ web_extract
     .register(...noteTools({ kv: K }))
     .register(clarifyTool)
-    .register(speakTool) // 多步任务中向用户播报中途进展/思路（避免埋头苦干）
     .register(createMemoryTool(memory))
     .register(makeRecallTool(recall)) // memory_search：模型主动检索长期记忆
     .register(...makeMediaTools())

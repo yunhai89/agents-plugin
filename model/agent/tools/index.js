@@ -6,7 +6,6 @@ export { ExecutionContext } from './context.js'
 export { ddgSearch, parseDDG, stripHtml } from './web.js'
 export { noteTools } from './notes.js'
 export { clarifyTool, CLARIFY_TOOL_NAME } from './clarify.js'
-export { speakTool, SPEAK_TOOL_NAME } from './speak.js'
 
 /**
  * 内置示例工具：get_weather（仅用于测试/演示，返回 mock 数据）。
