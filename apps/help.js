@@ -47,10 +47,20 @@ const SECTIONS = [
     ],
   },
   {
+    title: '表情包',
+    commands: [
+      { cmd: '#表情包安装', desc: '克隆表情包仓库（自动测速选最快 GitHub 代理）' },
+      { cmd: '#表情包更新', desc: '拉取上游更新（HEAD 未变则跳过）' },
+      { cmd: '#表情包状态', desc: '总数/体积/上游 commit/高频 Top5' },
+      { cmd: '#表情包开启 / #表情包关闭', desc: '热开关（即改即生效）' },
+      { cmd: '#表情包目录', desc: '查看源目录；#表情包目录 启用/停用 <名> 管理子集' },
+    ],
+  },
+  {
     title: '主人指令',
     commands: [
       { cmd: '#模型切换 +id', desc: '切换 LLM 模型' },
-      { cmd: '#添加mcp +JSON', desc: '按标准 mcpServers JSON 添加 MCP（连接验证+持久化）' },
+      { cmd: '#添加mcp +JSON', desc: '添加 MCP；私聊可不带 JSON，进入交互式添加（粘 JSON 即用）' },
       { cmd: '#启用mcp +名', desc: '启用某个 MCP 服务端' },
       { cmd: '#停止mcp +名', desc: '停止某个 MCP 服务端' },
       { cmd: '#mcp', desc: '查看 MCP 连接状态' },

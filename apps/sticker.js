@@ -43,15 +43,18 @@ export class StickerCmd extends plugin {
         '仅供娱乐；表情源版权归属 bangbang93HUB 及其贡献者。',
       ].join('\n'))
       const r = await m.install({
-        onProgress: async ({ elapsed }) => {
-          try { await this.reply(`仍在下载（已耗时 ${elapsed}s）…`, false, { recallMsg: 30 }) } catch { /* noop */ }
+        onProgress: async (info) => {
+          try {
+            if (info.phase === 'probe') { await this.reply(info.text || '测速中…', false, { recallMsg: 30 }); return }
+            await this.reply(`仍在下载（已耗时 ${info.elapsed}s）…`, false, { recallMsg: 30 })
+          } catch { /* noop */ }
         },
       })
       if (r.ok) {
         m.setEnable(true) // 安装成功自动开启
-        await this.reply(`✅ ${r.msg}\n已自动开启表情包功能（可用 #表情包关闭 关闭）。`)
+        await this.reply(`✅ ${r.msg}\n已自动开启表情包功能（可用 #表情包关闭 关闭）。${r.probe ? `\n\n代理测速：\n${r.probe}` : ''}`)
       } else {
-        await this.reply(`❌ ${r.msg}`)
+        await this.reply(`❌ ${r.msg}${r.probe ? `\n\n代理测速：\n${r.probe}` : ''}`)
       }
     } finally {
       busy = false

@@ -27,6 +27,18 @@ const IMG_EXT = new Set(Object.keys(MIME))
 
 function shellQuote(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
 
+/**
+ * 内置 GitHub 加速代理（克隆表情包仓库用）。前缀式直接拼在原 URL 前；gitclone 为域名替换镜像。
+ * 代理域名易失效，可用 sticker.githubProxies 追加/覆盖。来源（2026-07 搜集）：ghfast.top / gh-proxy.com /
+ * ghproxy.net / gitclone.com。详见 https://ghproxy.link/
+ */
+const GITHUB_PROXIES = [
+  { name: 'ghfast.top', xform: (u) => `https://ghfast.top/${u}` },
+  { name: 'gh-proxy.com', xform: (u) => `https://gh-proxy.com/${u}` },
+  { name: 'ghproxy.net', xform: (u) => `https://ghproxy.net/${u}` },
+  { name: 'gitclone.com', xform: (u) => u.replace(/^https:\/\/github\.com\//, 'https://gitclone.com/github.com/') },
+]
+
 export class StickerManager {
   constructor({ logger = () => {} } = {}) {
     this.logger = logger
@@ -186,7 +198,40 @@ export class StickerManager {
     return task.finally(() => clearInterval(iv))
   }
 
-  /** 安装：git 浅克隆 → 启用层同步 → 重建清单 */
+  /** 候选代理 URL：直连 + 内置代理 + sticker.githubProxies 追加（去重） */
+  _proxyCandidates(repo) {
+    const out = [{ name: '直连', url: repo }]
+    for (const p of GITHUB_PROXIES) { try { out.push({ name: p.name, url: p.xform(repo) }) } catch { /* noop */ } }
+    for (const px of (this.cfg.githubProxies || [])) {
+      if (typeof px === 'string' && px) {
+        const prefix = px.replace(/\/$/, '')
+        out.push({ name: prefix, url: `${prefix}/${repo}` })
+      }
+    }
+    const seen = new Set()
+    return out.filter((p) => p.url && !seen.has(p.url) && seen.add(p.url))
+  }
+
+  /** 测一个候选：git ls-remote 计时（真握手，比 HTTP HEAD 更准） */
+  async _testProxy(c, timeout = 12) {
+    const t0 = Date.now()
+    let ok = false
+    try {
+      const r = await runShell(`git ls-remote ${shellQuote(c.url)} HEAD`, { timeout, maxOutput: 500 })
+      ok = r.ok && /[0-9a-f]{7,40}/.test(r.stdout)
+    } catch { ok = false }
+    return { name: c.name, url: c.url, ok, ms: Date.now() - t0 }
+  }
+
+  /** 并发测速所有候选，按"可用优先 + 耗时升序"排序返回 */
+  async _pickFastestUrl(repo, { timeout = 12 } = {}) {
+    const cands = this._proxyCandidates(repo)
+    const results = await Promise.all(cands.map((c) => this._testProxy(c, timeout)))
+    results.sort((a, b) => (a.ok !== b.ok ? (a.ok ? -1 : 1) : a.ms - b.ms))
+    return results
+  }
+
+  /** 安装：测速选最优 GitHub 代理 → 浅克隆 → 启用层同步 → 重建清单 */
   async install({ onProgress } = {}) {
     ensureDirs()
     if (fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
@@ -195,18 +240,30 @@ export class StickerManager {
     const gitCheck = await runShell('git --version', { timeout: 10 })
     if (!gitCheck.ok) return { ok: false, msg: '系统未安装 git，无法克隆表情包仓库。请先安装 git 后重试。' }
     const repo = this.cfg.repo || 'https://github.com/Mxmilu666/bangbang93HUB.git'
-    const target = shellQuote(paths.REPO_DIR)
-    const buildCmd = (proxy) => `git ${proxy ? `-c http.proxy=${shellQuote(proxy)} ` : ''}clone --depth 1 ${shellQuote(repo)} ${target}`
-    let res = await this._withHeartbeat(runShell(buildCmd(false), { cwd: paths.STICKER_DIR, timeout: 600 }), onProgress)
-    if (!res.ok && this.cfg.gitProxy) {
-      res = await this._withHeartbeat(runShell(buildCmd(this.cfg.gitProxy), { cwd: paths.STICKER_DIR, timeout: 600 }), onProgress)
+
+    // 测速选最优代理
+    try { onProgress?.({ phase: 'probe', text: '正在测速选择最快的 GitHub 代理…' }) } catch { /* noop */ }
+    const ranked = await this._pickFastestUrl(repo)
+    const okList = ranked.filter((r) => r.ok)
+    const probe = ranked.map((r) => `${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? ` (${r.ms}ms)` : ''}`).join('  ')
+    if (!okList.length) {
+      return { ok: false, probe, msg: `所有代理都连不上 GitHub：\n${probe}\n出路：配置 sticker.githubProxies（数组）或手动 git clone 到 ${paths.REPO_DIR} 后发 #表情包更新。` }
     }
-    if (!res.ok || !fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
-      return { ok: false, msg: `克隆失败：${res.stderr || res.stdout || res.signal || '未知错误'}\n出路：① 配置 sticker.gitProxy 后重试；② 手动 git clone 仓库到 ${paths.REPO_DIR} 后发 #表情包更新。` }
+
+    // 用最优（失败则依次兜底其余可用代理）浅克隆
+    const target = shellQuote(paths.REPO_DIR)
+    let used = okList[0], res = null
+    for (const c of okList) {
+      res = await this._withHeartbeat(runShell(`git clone --depth 1 ${shellQuote(c.url)} ${target}`, { cwd: paths.STICKER_DIR, timeout: 600 }), onProgress)
+      used = c
+      if (res.ok || fs.existsSync(path.join(paths.REPO_DIR, '.git'))) break
+    }
+    if (!fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
+      return { ok: false, probe, msg: `克隆失败（已试 ${okList.length} 个代理）：\n${probe}\n最后错误：${res?.stderr || res?.stdout || res?.signal || '未知'}\n出路：手动 git clone 到 ${paths.REPO_DIR} 后发 #表情包更新。` }
     }
     const commit = await this._headSha()
     const stats = await this.syncImages({ commit })
-    return { ok: true, commit, stats, msg: `安装成功，共 ${stats.total} 个表情（新增 ${stats.added}）。` }
+    return { ok: true, commit, stats, proxy: used.name, probe, msg: `安装成功（经 ${used.name}），共 ${stats.total} 个表情（新增 ${stats.added}）。` }
   }
 
   /** 更新：fetch+reset；HEAD 未变短路；变则启用层同步 + 重建清单 */
