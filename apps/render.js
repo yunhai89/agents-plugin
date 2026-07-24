@@ -7,6 +7,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import Log from '../utils/Log.js'
 import { buildHtml, mdToHtml } from '../model/render/index.js'
 
 let _shotSeq = 0
@@ -44,6 +45,7 @@ export async function screenshot(name, html) {
 
     return await puppeteer.screenshot(name, { tplFile, saveId: safe })
   } catch (e) {
+    Log.warn('[render] screenshot 异常', e?.message || e)
     return null
   }
 }
@@ -56,8 +58,16 @@ export async function renderReplyImage(content) {
   try {
     const bodyHtml = await mdToHtml(content)
     const html = buildHtml({ bodyHtml })
-    return await screenshot('agents-plugin/reply', html)
+    let img = await screenshot('agents-plugin/reply', html)
+    if (!img) {
+      // puppeteer 偶发失败（并发/内存/超时/长内容）——重试一次
+      Log.warn('[render] 首次截图失败，重试中…')
+      img = await screenshot('agents-plugin/reply', html)
+    }
+    if (!img) Log.warn('[render] 重试仍失败，将回退文本')
+    return img
   } catch (e) {
+    Log.warn('[render] renderReplyImage 异常', e?.message || e)
     return null
   }
 }
