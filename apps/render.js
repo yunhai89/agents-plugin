@@ -110,10 +110,11 @@ async function getBrowser() {
       const pptr = mod.default || mod
       _browser = await pptr.launch({
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       })
       return _browser
     } catch (e) {
+      Log.warn('[render] 独立浏览器 launch 失败', e?.message || e)
       _browser = null
       return null
     } finally {
@@ -138,6 +139,7 @@ async function withPage(html, fn) {
     await page.setContent(String(html), { waitUntil: 'load', timeout: 30000 })
     return await fn(page)
   } catch (e) {
+    Log.warn('[render] 页面渲染/截图失败', e?.message || e)
     return null
   } finally {
     if (page) page.close().catch(() => {})
