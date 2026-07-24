@@ -2,9 +2,10 @@ node_modules/
 *.log
 .DS_Store
 
-# 文档（根目录 README.md 保留入库，其余 .md 忽略；但 skills/ 下的技能文件是插件功能必需，放行）
+# 文档（根目录 README.md / 开发指南.md 保留入库，其余 .md 忽略；但 skills/ 下的技能文件是插件功能必需，放行）
 *.md
 !/README.md
+!/开发指南.md
 !skills/*.md
 !skills/**/*.md
 

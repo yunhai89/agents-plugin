@@ -50,8 +50,7 @@
 - [🚀 快速开始](#-快速开始)
 - [⚙️ 详细配置](#️-详细配置pluginsagents-pluginconfigconfigyaml)
 - [🎮 指令](#-指令)
-- [🧩 自定义工具](#-自定义工具开发)
-- [🎓 技能系统](#-技能系统skills)
+- [🧩 扩展开发（工具 / 技能）](开发指南.md)
 - [🧠 记忆体系](#-记忆体系参考-openclaw文件即真相)
 - [💻 终端执行 + 审批](#-终端执行--审批allowlist-自动放行)
 - [🏗️ 架构](#️-架构)
@@ -334,71 +333,14 @@ mcp:
 
 ---
 
-## 🧩 自定义工具开发
+## 🧩 扩展开发（工具 / 技能）
 
-在插件根 `tools/` 目录新建 `.js`，自动加载（TRSS-Yunzai apps 风格）：
+本插件支持两种扩展，**详细的开发文档（完整 API 参考 + 示例）已独立到 [开发指南.md](开发指南.md)**：
 
-```js
-import { defineToolPack, defineTool, param, getGroup, ok } from '../model/toolkit/index.js'
+- **工具（Tool）**：给模型新增"动作"，模型可直接调用执行。放 `tools/` 目录自动加载，用 `defineToolPack` / `defineTool` / `param` SDK 编写。
+- **技能（Skill）**：渐进式披露的"说明书"，不新增动作、只教模型"什么场景用哪些工具、按什么顺序"。放 `skills/` 目录自动加载，写 `SKILL.md`。
 
-export default defineToolPack({
-  name: 'my',
-  description: '我的工具包',
-  tools: [
-    defineTool({
-      name: 'echo_group',
-      description: '返回当前群名',
-      category: 'query',                 // query/personal/message/group_manage/system
-      parameters: param.object({}),
-      async execute(p, ctx) {
-        const g = getGroup(ctx)
-        return g ? ok('当前群：' + (await g.getInfo?.())?.group_name) : ok('非群聊')
-      },
-    }),
-  ],
-})
-```
-
-`tools/example.js` 是带完整注释的模板。`category` 决定 RBAC 权限门槛。
-
----
-
-## 🎓 技能系统（Skills）
-
-**技能 = 渐进式披露的"说明书"**（参考 OpenClaw AgentSkills 规范）。与工具（Tool，能力本身、模型直接调用）不同，技能是一段 `SKILL.md` 指令，教模型"什么场景用哪些工具、按什么顺序、有什么约束"。它**不新增动作**，只增强决策。
-
-**模型如何"主动调用"技能**（解决"AI 不调用 skill"）：
-
-1. **目录始终可见**：所有技能的 `name`+`description` 编译成精简 `<available_skills>` 块，每轮注入 system prompt。模型由此**知道有哪些技能、各自适用什么场景**。
-2. **按需加载正文**：任务匹配某技能描述时，模型调用内置 `skill` 工具按名称加载其完整说明并遵循——这就是"主动调用技能"的通道。
-3. **兼容抢先注入**：`always: true` 正文常驻；`when` 关键词/正则命中时正文额外自动注入（向后兼容）。
-
-### 编写一个技能
-
-在插件根 `skills/` 目录新建 `my-skill.md`（自动加载，免重启可用 `reload_skills` 工具热加载）：
-
-```markdown
----
-name: my-skill
-description: "一句话说清何时用：名词短语，是模型决定是否加载的唯一依据"
-when: [关键词1, 关键词2]   # 可选：命中时抢先注入正文（向后兼容）
-priority: 5               # 可选：目录/注入排序
-always: false             # 可选：true 则正文常驻
----
-
-# 技能正文
-
-这里写完整的操作指引：用什么工具、按什么顺序、有哪些约束与最佳实践。
-正文只在被加载后（目录命中描述→调用 skill 工具，或 when 命中）注入，所以可以写得详细。
-可引用【自我状态】等 perception 注入的数据。
-```
-
-要点：
-- **`description` 是关键**——它是目录里模型唯一的判定依据，写成"何时用"的名词短语，别写成长篇流程。
-- 正文放决策约束与步骤，别只写"让用户去发某指令"。
-- 技能不是工具：没有 `execute`，不能被直接执行，只能被加载为指令。
-
-内置技能示例：`skills/group-admin.md`（群管）、`skills/deep-research.md`（深度研究）、`skills/capability-inquiry.md`（能力询问）、`skills/skillhub-install.md`（技能商店安装）。
+👉 完整的 SDK API（`defineTool` / `param.*` / `getGroup` / `ok` / `fail`…）、运行时 `ctx` 字段、`meta` 选项（审批 / 串行 / 结果截断）、`category` 与 RBAC、多组完整示例与常见陷阱，见 **[开发指南.md](开发指南.md)**。
 
 ---
 
