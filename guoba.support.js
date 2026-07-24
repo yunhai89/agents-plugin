@@ -151,6 +151,15 @@ export function supportGuoba() {
         { field: 'agent.research.maxRounds', label: '最大轮次', component: 'InputNumber', componentProps: { min: 1, max: 10 } },
         { field: 'agent.research.workerModel', label: '子代理模型', bottomHelpMessage: '空则用主模型；可填便宜模型省钱', component: 'Input' },
 
+        // —— 搜索服务 ——
+        { label: '搜索服务（web_search / 深度研究）', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.search.tavily.apiKey', label: 'Tavily API Key', bottomHelpMessage: '任填一个即启用该源；都不填回退 SearXNG，再兜底 DDG', component: 'Input', componentProps: { placeholder: 'tvly-xxx' } },
+        { field: 'agent.search.exa.apiKey', label: 'Exa API Key', component: 'Input' },
+        { field: 'agent.search.perplexity.apiKey', label: 'Perplexity API Key', component: 'Input' },
+        { field: 'agent.search.brave.apiKey', label: 'Brave API Key', component: 'Input' },
+        { field: 'agent.search.searxng.url', label: 'SearXNG 地址', bottomHelpMessage: '自建/公共 SearXNG 实例', component: 'Input', componentProps: { placeholder: 'http://localhost:8080' } },
+        { field: 'agent.search.ddg', label: 'DDG 兜底', bottomHelpMessage: '本地 DuckDuckGo，免 key、默认开（最后兜底）', component: 'Switch' },
+
         // —— MCP ——
         { label: 'MCP 服务端', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.mcp.requestTimeout', label: '请求超时(毫秒)', component: 'InputNumber', componentProps: { min: 1000, step: 1000 } },
