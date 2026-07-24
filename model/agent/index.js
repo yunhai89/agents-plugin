@@ -21,7 +21,7 @@ export { createProvider, Provider, mapToolChoice, toolsToList } from './provider
 export { OpenAIProvider } from './provider/openai.js'
 export { AnthropicProvider, toAnthropicMessages } from './provider/anthropic.js'
 
-export { ToolRegistry, ExecutionContext, ddgSearch, parseDDG, stripHtml, noteTools, clarifyTool, CLARIFY_TOOL_NAME } from './tools/index.js'
+export { ToolRegistry, ExecutionContext, ddgSearch, parseDDG, stripHtml, noteTools, clarifyTool, CLARIFY_TOOL_NAME, speakTool } from './tools/index.js'
 
 export { MemoryStore, MemoryLimitError, createMemoryTool, makeRecallTool } from './memory/index.js'
 
