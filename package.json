@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.2",
+    "exceljs": "^4.4.0",
     "highlight.js": "^11.10.0",
     "marked": "^14.1.0",
     "marked-highlight": "^2.2.2",
