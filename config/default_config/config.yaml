@@ -85,7 +85,7 @@ agent:
     servers:
   sticker:
     enable: false            # 表情包总开关（未下载/未开 → 不注入清单、不解析，零影响）
-    repo: "https://github.com/Mxmilu666/bangbang93HUB.git"   # 克隆地址（可换 fork/镜像 git 地址）
+    repo: ""                       # 官方表情包仓库地址（作者维护，用户无需改；留空=尚未接入）
     gitProxy: ""             # git http.proxy（fetch 兜底用，如 http://127.0.0.1:7890）
     githubProxies: []        # 克隆加速代理前缀数组（追加在内置 ghfast.top/gh-proxy.com/ghproxy.net/gitclone.com 之上，安装时测速选最快）
     maxPerReply: 2           # 单条回复最多贴纸数
@@ -93,9 +93,8 @@ agent:
     sendRate: 0.25           # 概率闸：门控通过后实际带图概率（防每条都带→更 AI）
     antiConsecutive: true    # 防连发：上一条带过则本条不带
     groupOnly: false         # 仅群聊启用
-    excludeDirs:             # 目录黑名单（NSFW 默认排除）
-      - "8Mi_Yile"
-      - "0-Dress"
+    manifest: ""             # 仓库 manifest 文件名（留空=自动识别根目录第一个合规 .json，含 id/name/tags/docs）
+    excludeDirs: []          # 目录黑名单（不复制进 images/）
     excludeKeywords: []      # 文件名关键词黑名单（追加在内置表之上）
     listTopN: 30             # prompt 注入清单条数上限
   terminal:

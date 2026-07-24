@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Config from '../../utils/Config.js'
 import { runShell } from '../terminal/index.js'
+import { spawn } from 'node:child_process'
 import {
   paths, ensureDirs, scanRepo, buildIndex, loadIndex, saveIndex, imageAbsOf, dirSize, buildCatalog,
 } from './index.js'
@@ -191,11 +192,30 @@ export class StickerManager {
     return b || 'HEAD'
   }
 
-  _withHeartbeat(task, onProgress) {
-    if (typeof onProgress !== 'function') return task
-    const t0 = Date.now()
-    const iv = setInterval(() => { try { onProgress({ elapsed: Math.round((Date.now() - t0) / 1000) }) } catch { /* noop */ } }, 15000)
-    return task.finally(() => clearInterval(iv))
+  /**
+   * 流式跑 git（spawn），捕获 --progress 实时进度（Receiving objects X% 等）。
+   * runShell 是缓冲式 exec，拿不到中途输出；克隆这种长任务用它就报不了真实进度，故用 spawn。
+   * 返回 runShell 同构结果 {ok, exitCode, stdout, stderr, ...}，便于上层统一处理。
+   */
+  _spawnGit(args, { cwd, timeout = 600, onProgress } = {}) {
+    return new Promise((resolve) => {
+      let stdout = '', stderr = '', lastProgress = ''
+      let timer = null
+      const finish = (r) => { if (timer) clearTimeout(timer); resolve(r) }
+      let proc
+      try { proc = spawn('git', args, { cwd: cwd || undefined, stdio: ['ignore', 'pipe', 'pipe'] }) }
+      catch (e) { return finish({ ok: false, exitCode: null, stdout: '', stderr: `spawn 失败：${e?.message || e}` }) }
+      if (timeout) timer = setTimeout(() => { try { proc.kill('SIGKILL') } catch { /* noop */ } finish({ ok: false, timedOut: true, exitCode: null, signal: 'SIGKILL', stdout, stderr }) }, timeout * 1000)
+      proc.stdout?.on('data', (d) => { stdout += d.toString() })
+      proc.stderr?.on('data', (d) => {
+        const chunk = d.toString()
+        stderr += chunk
+        const ms = [...chunk.matchAll(/(Receiving objects|Counting objects|Resolving deltas|Compressing objects|Enumerating objects):\s*(\d+)%/g)]
+        if (ms.length) { lastProgress = `${ms[ms.length - 1][1]} ${ms[ms.length - 1][2]}%`; try { onProgress?.({ progress: lastProgress }) } catch { /* noop */ } }
+      })
+      proc.on('error', (e) => finish({ ok: false, exitCode: null, stdout, stderr: stderr + `\n${e?.message || e}` }))
+      proc.on('close', (code) => finish({ ok: code === 0, exitCode: code, stdout, stderr, progress: lastProgress }))
+    })
   }
 
   /** 候选代理 URL：直连 + 内置代理 + sticker.githubProxies 追加（去重） */
@@ -231,58 +251,79 @@ export class StickerManager {
     return results
   }
 
-  /** 安装：测速选最优 GitHub 代理 → 浅克隆 → 启用层同步 → 重建清单 */
-  async install({ onProgress } = {}) {
+  /**
+   * 安装：测速选最优 GitHub 代理 → 浅克隆 → 启用层同步 → 重建清单。
+   * 全程仅控制台打实时进度（logger），群聊零消息——只在结束返回成功/失败给调用方回复。
+   */
+  async install() {
     ensureDirs()
     if (fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
       return { ok: false, already: true, msg: '_repo 已存在。如需拉取最新请用 #表情包更新；如需重装请先删除 _repo 目录。' }
     }
     const gitCheck = await runShell('git --version', { timeout: 10 })
-    if (!gitCheck.ok) return { ok: false, msg: '系统未安装 git，无法克隆表情包仓库。请先安装 git 后重试。' }
-    const repo = this.cfg.repo || 'https://github.com/Mxmilu666/bangbang93HUB.git'
+    if (!gitCheck.ok) return { ok: false, msg: '系统未安装 git，无法克隆表情包仓库。请先安装 git。' }
+    const repo = (this.cfg.repo || '').trim()
+    if (!repo) return { ok: false, msg: '尚未配置表情包仓库地址（agent.sticker.repo 为空）。请填入你自建/自有的表情包 git 仓库后重试。' }
 
-    // 测速选最优代理
-    try { onProgress?.({ phase: 'probe', text: '正在测速选择最快的 GitHub 代理…' }) } catch { /* noop */ }
+    // 测速选最优代理（结果打控制台）
+    this.logger('mark', '[sticker] 开始测速 GitHub 代理…')
     const ranked = await this._pickFastestUrl(repo)
     const okList = ranked.filter((r) => r.ok)
     const probe = ranked.map((r) => `${r.ok ? '✅' : '❌'} ${r.name}${r.ok ? ` (${r.ms}ms)` : ''}`).join('  ')
+    this.logger('mark', `[sticker] 代理测速：${probe}`)
     if (!okList.length) {
-      return { ok: false, probe, msg: `所有代理都连不上 GitHub：\n${probe}\n出路：配置 sticker.githubProxies（数组）或手动 git clone 到 ${paths.REPO_DIR} 后发 #表情包更新。` }
+      this.logger('error', `[sticker] 所有代理都连不上 GitHub：${probe}`)
+      return { ok: false, msg: '所有 GitHub 代理都连不上（详见控制台）。可配置 sticker.githubProxies 或手动 git clone 后 #表情包更新。' }
     }
 
-    // 用最优（失败则依次兜底其余可用代理）浅克隆
-    const target = shellQuote(paths.REPO_DIR)
+    // 用最优（失败则依次兜底）浅克隆；进度实时打控制台
+    this.logger('mark', `[sticker] 使用「${okList[0].name}」克隆…`)
+    const target = paths.REPO_DIR
     let used = okList[0], res = null
     for (const c of okList) {
-      res = await this._withHeartbeat(runShell(`git clone --depth 1 ${shellQuote(c.url)} ${target}`, { cwd: paths.STICKER_DIR, timeout: 600 }), onProgress)
+      if (c !== okList[0]) this.logger('mark', `[sticker] 切换代理「${c.name}」重试…`)
+      let lastLog = ''
+      res = await this._spawnGit(['clone', '--depth', '1', '--progress', c.url, target], {
+        cwd: paths.STICKER_DIR, timeout: 600,
+        onProgress: ({ progress }) => { if (progress && progress !== lastLog) { lastLog = progress; this.logger('info', `[sticker] 下载进度 ${progress}`) } },
+      })
       used = c
       if (res.ok || fs.existsSync(path.join(paths.REPO_DIR, '.git'))) break
+      this.logger('warn', `[sticker] 「${c.name}」克隆失败：${(res.stderr || res.stdout || '').slice(-160)}`)
     }
     if (!fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
-      return { ok: false, probe, msg: `克隆失败（已试 ${okList.length} 个代理）：\n${probe}\n最后错误：${res?.stderr || res?.stdout || res?.signal || '未知'}\n出路：手动 git clone 到 ${paths.REPO_DIR} 后发 #表情包更新。` }
+      this.logger('error', `[sticker] 克隆失败（已试 ${okList.length} 个代理）：${res?.stderr || res?.stdout || res?.signal || '未知'}`)
+      return { ok: false, msg: `克隆失败（已试 ${okList.length} 个代理，详见控制台）。可手动 git clone 到 ${paths.REPO_DIR} 后 #表情包更新。` }
     }
     const commit = await this._headSha()
     const stats = await this.syncImages({ commit })
-    return { ok: true, commit, stats, proxy: used.name, probe, msg: `安装成功（经 ${used.name}），共 ${stats.total} 个表情（新增 ${stats.added}）。` }
+    this.logger('mark', `[sticker] 安装完成：${stats.total} 个表情（经 ${used.name}，commit ${String(commit).slice(0, 8)})`)
+    return { ok: true, commit, stats, proxy: used.name, msg: `安装完成，共 ${stats.total} 个表情（经 ${used.name}）。` }
   }
 
-  /** 更新：fetch+reset；HEAD 未变短路；变则启用层同步 + 重建清单 */
-  async update({ onProgress } = {}) {
+  /** 更新：fetch+reset；HEAD 未变短路；变则启用层同步 + 重建清单。全程控制台打进度。 */
+  async update() {
     if (!fs.existsSync(path.join(paths.REPO_DIR, '.git'))) {
       return { ok: false, msg: '尚未安装表情包资源，请先 #表情包安装。' }
     }
+    this.logger('mark', '[sticker] 开始更新…')
     const branch = await this._defaultBranch()
     const before = await this._headSha()
     const fetchCmd = (proxy) => `git ${proxy ? `-c http.proxy=${shellQuote(proxy)} ` : ''}fetch --depth 1 origin ${shellQuote(branch)}`
-    let res = await this._withHeartbeat(runShell(fetchCmd(false), { cwd: paths.REPO_DIR, timeout: 600 }), onProgress)
+    let res = await runShell(fetchCmd(false), { cwd: paths.REPO_DIR, timeout: 600 })
     if (!res.ok && this.cfg.gitProxy) {
-      res = await this._withHeartbeat(runShell(fetchCmd(this.cfg.gitProxy), { cwd: paths.REPO_DIR, timeout: 600 }), onProgress)
+      this.logger('mark', '[sticker] 直连 fetch 失败，用 gitProxy 重试…')
+      res = await runShell(fetchCmd(this.cfg.gitProxy), { cwd: paths.REPO_DIR, timeout: 600 })
     }
-    if (!res.ok) return { ok: false, msg: `更新失败：${res.stderr || res.stdout || '未知错误'}（可配置 sticker.gitProxy 重试）` }
+    if (!res.ok) {
+      this.logger('error', `[sticker] 更新失败：${res.stderr || res.stdout || '未知'}`)
+      return { ok: false, msg: `更新失败（详见控制台；可配置 sticker.gitProxy 重试）。` }
+    }
     await runShell('git reset --hard FETCH_HEAD', { cwd: paths.REPO_DIR, timeout: 120 })
     const after = await this._headSha()
     if (before && after && before === after) return { ok: true, noop: true, msg: '已是最新，无需更新。' }
     const stats = await this.syncImages({ commit: after })
+    this.logger('mark', `[sticker] 更新完成：+${stats.added} ~${stats.updated} -${stats.removed}，共 ${stats.total}`)
     return { ok: true, stats, msg: `更新完成：新增 ${stats.added} / 更新 ${stats.updated} / 移除 ${stats.removed}，共 ${stats.total} 个。` }
   }
 
@@ -292,8 +333,8 @@ export class StickerManager {
    */
   async syncImages({ commit } = {}) {
     ensureDirs()
-    const scanned = scanRepo({ excludeDirs: this.cfg.excludeDirs, excludeKeywords: this.cfg.excludeKeywords })
-    const wantRel = new Set(scanned.map((s) => s.relpath))
+    const scanned = scanRepo({ manifest: this.cfg.manifest, excludeDirs: this.cfg.excludeDirs, excludeKeywords: this.cfg.excludeKeywords })
+    const wantRel = new Set(scanned.map((s) => s.file))
     let added = 0, updated = 0, removed = 0
 
     // 删除 images/ 中多余文件（上游删除 / 刚加入黑名单的目录）
@@ -314,7 +355,7 @@ export class StickerManager {
     // 复制/覆盖
     const copy = (src, dst) => { fs.mkdirSync(path.dirname(dst), { recursive: true }); fs.copyFileSync(src, dst) }
     for (const s of scanned) {
-      const dst = path.join(paths.IMAGES_DIR, s.relpath)
+      const dst = path.join(paths.IMAGES_DIR, s.file)
       let needCopy = false
       try {
         if (!fs.existsSync(dst)) needCopy = true
@@ -325,7 +366,7 @@ export class StickerManager {
       } catch { needCopy = true }
       if (!needCopy) continue
       const existed = fs.existsSync(dst)
-      try { copy(s.abs, dst); existed ? updated++ : added++ } catch (e) { this.logger('warn', '[sticker] 复制失败', s.relpath, e?.message || e) }
+      try { copy(s.abs, dst); existed ? updated++ : added++ } catch (e) { this.logger('warn', '[sticker] 复制失败', s.file, e?.message || e) }
     }
 
     // 重建清单（合并旧）

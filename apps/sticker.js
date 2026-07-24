@@ -37,24 +37,13 @@ export class StickerCmd extends plugin {
     const m = getStickerManager()
     busy = true
     try {
-      await this.reply([
-        '⏬ 开始克隆表情包仓库（浅克隆，可能耗时数分钟）…',
-        '⚠️ 仓库可能含 NSFW 内容，已默认排除 8Mi_Yile / 0-Dress 目录。',
-        '仅供娱乐；表情源版权归属 bangbang93HUB 及其贡献者。',
-      ].join('\n'))
-      const r = await m.install({
-        onProgress: async (info) => {
-          try {
-            if (info.phase === 'probe') { await this.reply(info.text || '测速中…', false, { recallMsg: 30 }); return }
-            await this.reply(`仍在下载（已耗时 ${info.elapsed}s）…`, false, { recallMsg: 30 })
-          } catch { /* noop */ }
-        },
-      })
+      // 全程静默：测速/排名/下载进度/切换仅打控制台（manager.logger），群聊只在结束回成功/失败
+      const r = await m.install()
       if (r.ok) {
         m.setEnable(true) // 安装成功自动开启
-        await this.reply(`✅ ${r.msg}\n已自动开启表情包功能（可用 #表情包关闭 关闭）。${r.probe ? `\n\n代理测速：\n${r.probe}` : ''}`)
+        await this.reply(`✅ ${r.msg} 已自动开启表情包功能。`)
       } else {
-        await this.reply(`❌ ${r.msg}${r.probe ? `\n\n代理测速：\n${r.probe}` : ''}`)
+        await this.reply(`❌ ${r.msg}`)
       }
     } finally {
       busy = false
@@ -65,14 +54,10 @@ export class StickerCmd extends plugin {
   async update() {
     if (!this.e.isMaster) return false
     if (busy) { await this.reply('正在处理中，请稍候'); return false }
-    const m = getStickerManager()
     busy = true
     try {
-      const r = await m.update({
-        onProgress: async ({ elapsed }) => {
-          try { await this.reply(`仍在拉取（已耗时 ${elapsed}s）…`, false, { recallMsg: 30 }) } catch { /* noop */ }
-        },
-      })
+      // 全程静默，仅控制台打进度
+      const r = await getStickerManager().update()
       await this.reply(r.ok ? (r.noop ? r.msg : `✅ ${r.msg}`) : `❌ ${r.msg}`)
     } finally {
       busy = false
