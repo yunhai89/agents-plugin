@@ -483,7 +483,7 @@ utils/       Config 配置读写（插件目录 + 热加载） · Log 分级日�
 
 ```
 [trigger] user=3891977697 gid=960179589 mode=at inputLen=83
-[chat]    user=3891977697 gid=960179589 conv=3 model=mimo-v2.5-pro persona=default vision=off ctx=1116字
+[chat]    user=3891977697 gid=960179589 conv=3 model=mimo-v2.5-pro persona=default vision=off thinking=off ctx=1116字
 [agent]   run start ... inputLen=83 msgs=21 tools=39 maxTurns=50
 [agent]   run end turns=1 stop=stop usage={in:14816,out:808} replyLen=1098 totalMs=19188
 [chat]    reply turns=1 stop=stop usage=in:14816/out:808 replyLen=1098
@@ -506,6 +506,7 @@ utils/       Config 配置读写（插件目录 + 热加载） · Log 分级日�
 | `model` | 当前主模型 id |
 | `persona` | 当前人设 id（`default` = 内置默认身份） |
 | `vision` | 主模型视觉能力：`on` = 直发原图 / `off` = 走视觉子模型图转文 |
+| `thinking` | 模型深度思考（reasoning）开关：`on` = 已启用 `agent.thinking` / `off` = 未启用 |
 | `ctx` | 注入 system 的「情境感知」文本长度（字）：含时间/发言者/自我状态/近期群聊等；为空则不显示 |
 
 **`[agent] run start`** —— ReAct 主循环开始：

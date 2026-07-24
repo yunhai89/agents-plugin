@@ -515,7 +515,7 @@ export class Chat extends plugin {
       Log.warn('[perception/skill] 注入失败', e?.message || e)
     }
 
-    Log.mark('[chat]', `user=${ctx.userId} gid=${ctx.groupId || '-'} conv=${ctx.conversationId} model=${cfg.model} persona=${personaId || 'default'} vision=${caps.vision ? 'on' : 'off'}${context ? ` ctx=${String(context).length}字` : ''}`)
+    Log.mark('[chat]', `user=${ctx.userId} gid=${ctx.groupId || '-'} conv=${ctx.conversationId} model=${cfg.model} persona=${personaId || 'default'} vision=${caps.vision ? 'on' : 'off'} thinking=${cfg.thinking ? 'on' : 'off'}${context ? ` ctx=${String(context).length}字` : ''}`)
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
     if (wantProgress) await this.e.reply('思考中…')
