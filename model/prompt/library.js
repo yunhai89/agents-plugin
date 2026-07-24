@@ -162,6 +162,11 @@ export function buildSkillsPromptSection(catalog) {
   ].join('\n')
 }
 
+/** 表情包段：stickers.catalog() 产出的清单块（含可用表情 + 使用规则）；空则不注入。 */
+export function buildStickerPromptSection(catalog) {
+  return String(catalog || '').trim()
+}
+
 /**
  * 工具目录速查：每工具一行 `- name: 摘要`（移植 OpenClaw coreToolSummaries 思路）。
  * 摘要取 tool.meta.summary，否则截断 description；完整参数仍由协议 tools 数组提供。
@@ -189,6 +194,7 @@ export function buildAgentSystemPrompt({
   serviceDirective = '',
   toolCatalog = '',
   skillsSection = '',
+  stickerSection = '',
   recalledMemory = '',
   memorySnapshot = '',
   context = '',
@@ -204,6 +210,7 @@ export function buildAgentSystemPrompt({
   }
   if (toolCatalog) parts.push(String(toolCatalog).trim())
   if (skillsSection) parts.push(String(skillsSection).trim())
+  if (stickerSection) parts.push(String(stickerSection).trim())
   if (recalledMemory) parts.push(String(recalledMemory).trim())
   if (memorySnapshot) parts.push(String(memorySnapshot).trim())
   if (context) parts.push(String(context).trim())

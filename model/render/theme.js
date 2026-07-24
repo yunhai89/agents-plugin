@@ -151,6 +151,8 @@ tbody tr:nth-child(even) { background: #fafbfc; }
 /* 分隔线 / 图片 */
 hr { border: 0; border-top: 1px solid #e5e7eb; margin: 1.4em 0; }
 img { max-width: 100%; border-radius: 10px; }
+/* 表情包（图片模式内嵌进回复图）：块级独占一行、限高，与文字合成一张图 */
+.sticker { display: block; max-height: 96px; width: auto; margin: 8px auto; border-radius: 8px; }
 
 /* 专用：帮助图 / 列表图的辅助类（复用主题时可用） */
 .head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; padding-bottom: 16px; border-bottom: 1px solid #eef0f3; }

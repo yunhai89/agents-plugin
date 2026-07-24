@@ -37,6 +37,7 @@ import { loadToolPacks } from '../model/toolkit/index.js'
 import { createSearchManager, makeSearchTools } from '../model/search/index.js'
 import { PersonaStore, PersonaService } from '../model/persona/index.js'
 import { VisionService, describeImages } from '../model/vision/index.js'
+import { getStickerManager } from '../model/sticker/manager.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
@@ -251,6 +252,7 @@ async function buildRuntime() {
     keepReasoning: cfg.keepReasoning === true,
     reflect: cfg.reflect ?? 'auto',
     reflectMaxIterations: cfg.reflectMaxIterations ?? 1,
+    stickers: getStickerManager({ logger: Log.tag('sticker') }), // 表情包清单注入（_assembleSystem 用 catalog()）
     logger: Log.tag('agent'),
   })
 
@@ -282,7 +284,7 @@ async function buildRuntime() {
     }
   }
 
-  return { agent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, kv: K }
+  return { agent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
 }
 
 async function getRuntime() {
@@ -361,6 +363,10 @@ async function fireReminder(info) {
   }
 }
 
+// #添加mcp 交互式监听：私聊下记录"待接收 mcpServers JSON"的用户（带 TTL 防卡死；进程重启清空）
+const MCP_ADD_PENDING_TTL = 120000 // 2 分钟
+const mcpAddPending = new Map() // userId(String) -> { at }
+
 export class Chat extends plugin {
   constructor() {
     super({
@@ -377,7 +383,7 @@ export class Chat extends plugin {
         { reg: '^#拒绝\\s*(\\d+)', fnc: 'reject', permission: 'master' },
         { reg: '^#待确认$', fnc: 'pending', permission: 'master' },
         { reg: '^#mcp$', fnc: 'mcpStatus', permission: 'master' },
-        { reg: '^#添加mcp', fnc: 'addMcp', permission: 'master' },
+        { reg: '^#添加[Mm][Cc][Pp]', fnc: 'addMcp', permission: 'master' },
         { reg: '^#agents重载$', fnc: 'agentsReload', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
@@ -407,6 +413,13 @@ export class Chat extends plugin {
 
   // —— AI 触发 ——
   async onTrigger() {
+    // #添加mcp 交互式监听：私聊下，待接收 JSON 的用户，本条消息当作 mcpServers 配置处理
+    const __uid = String(this.e.user_id)
+    if (!this.e.isGroup && mcpAddPending.has(__uid)) {
+      const p = mcpAddPending.get(__uid)
+      if (Date.now() - p.at > MCP_ADD_PENDING_TTL) mcpAddPending.delete(__uid) // 超时自清
+      else return this._consumeMcpAddJson(this.e.msg)
+    }
     const cfg = Config.get().agent || {}
     const mode = cfg.trigger || 'at' // at | command | both
     const cmd = cfg.triggerCommand || '#ai'
@@ -516,17 +529,27 @@ export class Chat extends plugin {
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
       const suffix = stopReason === 'max_turns' ? '（已达工具调用上限）' : ''
+      // 表情包：本轮一次性门控（决定带哪些图 + 记冷却/防连发/usage），图片/文本模式共用结果，避免双计
+      const acceptMap = (rt.sticker && content) ? rt.sticker.decide(content, ctx) : null
       // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
       const replyMode = cfg.reply?.mode || 'image'
       let delivered = false
       if (replyMode === 'image' && content) {
         try {
-          const img = await renderReplyImage(content)
+          const sc = acceptMap ? rt.sticker.applyImage(content, acceptMap) : content
+          const img = await renderReplyImage(sc)
           if (img) { await this.e.reply(img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }
       if (!delivered) {
-        await this.e.reply(`${content || '(无回复)'}${suffix ? `\n${suffix}` : ''}`)
+        // 文本模式（或图片渲染失败）：表情包混排（无图→纯文本；有图→segment 数组）
+        const seg = acceptMap ? rt.sticker.applyText(content, acceptMap) : (content || '(无回复)')
+        if (typeof seg === 'string') {
+          await this.e.reply(`${seg}${suffix ? `\n${suffix}` : ''}`)
+        } else {
+          await this.e.reply(seg)
+          if (suffix) await this.e.reply(suffix)
+        }
       } else if (suffix) {
         await this.e.reply(suffix) // 图片已发，max_turns 提示作附注
       }
@@ -610,26 +633,58 @@ export class Chat extends plugin {
   }
 
   // —— 添加 MCP（标准 mcpServers JSON）→ 连接验证 → 成功则持久化 ——
+  // 两种用法：① #添加mcp <JSON> 一行带配置（任意会话）；
+  //          ② 私聊发 #添加mcp（不带 JSON）进入监听，下一条消息当作 JSON 处理（onTrigger 拦截），处理一次即结束。
+  //          群聊不带 JSON 只显示用法（群聊不开监听，避免群消息被吞）。
   async addMcp() {
-    const body = this.e.msg.replace(/^#添加mcp\b\s*/, '').trim()
+    const body = this.e.msg.replace(/^#添加mcp\b\s*/i, '').trim()
     if (!body) {
+      if (!this.e.isGroup) {
+        // 私聊：进入交互式监听，等下一条消息作为 mcpServers JSON
+        mcpAddPending.set(String(this.e.user_id), { at: Date.now() })
+        await this.e.reply([
+          '📝 已进入添加 MCP 模式，请直接发送 mcpServers JSON 配置。',
+          '支持 Claude Desktop / Z.AI 标准格式，例如：',
+          '```json',
+          '{ "mcpServers": { "zai": { "type": "stdio", "command": "npx", "args": ["-y","@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "xxx" } } } }',
+          '```',
+          '收到后会立即连接验证；成功则写入配置（持久化、热加载），失败会报错。',
+          `（${MCP_ADD_PENDING_TTL / 1000} 秒内有效；处理一次即结束）`,
+        ].join('\n'))
+        return true
+      }
+      // 群聊：不开启监听（避免群消息被吞），提示用一行带 JSON 的方式或去私聊
       await this.e.reply([
         '用法：#添加mcp <mcpServers JSON>',
-        '支持 Claude Desktop / Z.AI 标准格式，例如：',
+        '或私聊发送 #添加mcp 进入交互式添加（直接粘贴 JSON 即可）。',
+        '示例：',
         '```json',
         '{ "mcpServers": { "zai": { "type": "stdio", "command": "npx", "args": ["-y","@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "xxx" } } } }',
         '```',
-        '添加后会立即连接验证；成功则写入配置（持久化、热加载），失败会报错。',
       ].join('\n'))
       return true
     }
+    const parsed = this._parseMcpBody(body)
+    if (!parsed.ok) { await this.e.reply(parsed.msg); return true }
+    await this.e.reply('⏳ 正在连接验证…')
+    await this.e.reply((await this._applyMcpServers(parsed.servers)).join('\n'))
+    return true
+  }
+
+  /** 解析 mcpServers JSON：成功 {ok:true, servers}；失败 {ok:false, msg}（不回复，由调用方决定） */
+  _parseMcpBody(body) {
     let parsed
     try { parsed = JSON.parse(body) }
-    catch (e) { await this.e.reply(`❌ JSON 解析失败：${e?.message || e}\n请粘贴完整的 mcpServers JSON。`); return true }
-    let servers = parsed?.mcpServers || parsed
+    catch (e) { return { ok: false, msg: `❌ JSON 解析失败：${e?.message || e}\n请粘贴完整的 mcpServers JSON。` } }
+    const servers = parsed?.mcpServers || parsed
     if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
-      await this.e.reply('❌ 未找到服务端配置（需 { "mcpServers": {...} } 或 { "name": {...} }）'); return true
+      return { ok: false, msg: '❌ 未找到服务端配置（需 { "mcpServers": {...} } 或 { "name": {...} }）' }
     }
+    return { ok: true, servers }
+  }
+
+  /** 逐个连接验证 + 注册工具；成功的写入配置持久化（触发热加载）。返回结果行数组。 */
+  async _applyMcpServers(servers) {
     const rt = await getRuntime()
     const cfg = Config.get()
     cfg.agent = cfg.agent || {}
@@ -653,7 +708,19 @@ export class Chat extends plugin {
       }
     }
     if (anyOk) Config.save(cfg) // 持久化成功的 + 触发热加载
-    await this.e.reply(results.join('\n'))
+    return results
+  }
+
+  /** 交互式添加：把监听期间收到的那条消息当作 mcpServers JSON 处理（处理一次即结束监听）。 */
+  async _consumeMcpAddJson(raw) {
+    const uid = String(this.e.user_id)
+    mcpAddPending.delete(uid) // 无论成败都结束监听
+    const body = (raw || '').trim()
+    if (!body) { await this.e.reply('⚠️ 内容为空，已退出添加流程。重新发送 #添加mcp 可再试。'); return true }
+    const parsed = this._parseMcpBody(body)
+    if (!parsed.ok) { await this.e.reply(`${parsed.msg}\n（已退出添加流程，重新发送 #添加mcp 可再试）`); return true }
+    await this.e.reply('⏳ 收到配置，正在连接验证…')
+    await this.e.reply((await this._applyMcpServers(parsed.servers)).join('\n'))
     return true
   }
 

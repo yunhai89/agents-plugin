@@ -15,7 +15,7 @@
 import { randomUUID } from 'node:crypto'
 import { ExecutionContext } from './tools/context.js'
 import { stringifyArgs, estimateMessages, mergeUsage } from './messages.js'
-import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildSkillsPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
+import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildSkillsPromptSection, buildStickerPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
 
 const DEFAULT_IDENTITY = TEMPLATES.agent.system
 
@@ -50,6 +50,7 @@ export class Agent {
     this.tools = config.tools || null
     this.memory = config.memory || null
     this.skills = config.skills || null
+    this.stickers = config.stickers || null // 表情包清单注入（catalog()，无资源时返回空串零影响）
 
     this.systemPrompt = config.systemPrompt || DEFAULT_IDENTITY
     this.maxTurns = config.maxTurns ?? 90
@@ -305,6 +306,7 @@ export class Agent {
     const identity = systemPromptOverride || this.systemPrompt
     const toolCatalog = this.tools && this.tools.list().length ? buildToolCatalogSection(this.tools.list()) : ''
     const skillsSection = this.skills ? buildSkillsPromptSection(this.skills.catalog()) : ''
+    const stickerSection = this.stickers ? buildStickerPromptSection(this.stickers.catalog()) : ''
     let recalledMemory = ''
     if (this.recall && memories && memories.length) recalledMemory = this.recall.formatForPrompt(memories) || ''
     const memorySnapshot = this.memory ? (this.memory.snapshotAll() || '') : ''
@@ -314,6 +316,7 @@ export class Agent {
       serviceDirective: SERVICE_DIRECTIVE,
       toolCatalog,
       skillsSection,
+      stickerSection,
       recalledMemory,
       memorySnapshot,
       context,
