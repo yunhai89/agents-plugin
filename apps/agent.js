@@ -41,6 +41,7 @@ import { getStickerManager } from '../model/sticker/manager.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
+import { calcTool } from '../model/calc/index.js'
 import { screenshot, renderReplyImage } from './render.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
@@ -62,6 +63,7 @@ const PROGRESS_LABELS = {
   get_group_file: '📎 获取文件',
   list_group_files: '📎 列出文件',
   terminal: '💻 执行命令',
+  calculate: '🧮 计算中',
   process: '💻 进程操作',
   group_info: '⚙️ 查群信息',
   group_members: '⚙️ 查成员',
@@ -204,6 +206,9 @@ async function buildRuntime() {
     tools.register(makeTerminalTool())
     Log.info('[terminal] 已启用终端执行工具（每条命令需主人 #确认）')
   }
+
+  // Python 精确计算工具（数学/统计等；沙箱内执行，默认开）
+  if (cfg.calc?.enable !== false) tools.register(calcTool)
 
   // skill 工具：模型主动调用 skill 的通道（按 name 加载说明书正文）—— 渐进式披露的载入入口
   tools.register(makeSkillTool(skills))
@@ -531,6 +536,8 @@ export class Chat extends plugin {
       const suffix = stopReason === 'max_turns' ? '（已达工具调用上限）' : ''
       // 表情包：本轮一次性门控（决定带哪些图 + 记冷却/防连发/usage），图片/文本模式共用结果，避免双计
       const acceptMap = (rt.sticker && content) ? rt.sticker.decide(content, ctx) : null
+      // 群聊回复艾特发言人（agent.reply.atSender，默认开；私聊不艾特）
+      const atSender = (ctx.isGroup && cfg.reply?.atSender !== false && ctx.userId && typeof segment !== 'undefined') ? segment.at(ctx.userId) : null
       // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
       const replyMode = cfg.reply?.mode || 'image'
       let delivered = false
@@ -538,16 +545,17 @@ export class Chat extends plugin {
         try {
           const sc = acceptMap ? rt.sticker.applyImage(content, acceptMap) : content
           const img = await renderReplyImage(sc)
-          if (img) { await this.e.reply(img); delivered = true }
+          if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }
       if (!delivered) {
         // 文本模式（或图片渲染失败）：表情包混排（无图→纯文本；有图→segment 数组）
         const seg = acceptMap ? rt.sticker.applyText(content, acceptMap) : (content || '(无回复)')
         if (typeof seg === 'string') {
-          await this.e.reply(`${seg}${suffix ? `\n${suffix}` : ''}`)
+          const txt = `${seg}${suffix ? `\n${suffix}` : ''}`
+          await this.e.reply(atSender ? [atSender, txt] : txt)
         } else {
-          await this.e.reply(seg)
+          await this.e.reply(atSender ? [atSender, ...seg] : seg)
           if (suffix) await this.e.reply(suffix)
         }
       } else if (suffix) {

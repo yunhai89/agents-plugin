@@ -160,6 +160,7 @@ agent:
 | `stream` | `false` | 逐字流式输出（依赖适配器、不稳，默认关） |
 | `progress` | `true` | 工具调用时推送节流进度消息（消除"干等"，默认开） |
 | `reply.mode` | `image` | 回复渲染：`image`（markdown→浅色图片，默认）/ `text`（纯文本） |
+| `reply.atSender` | `true` | 群聊回复时艾特发言人（私聊不艾特） |
 | `thinking` | 空 | 思考模式，如 `{ type: "enabled", budget_tokens: 16000 }` |
 | `memoryLimits` | 空 | 声明式记忆字符上限，如 `{ memory: 2200, user: 1375 }` |
 | `systemPrompt` | 空 | 默认身份 system prompt（留空用富默认身份；被人设覆盖时失效） |

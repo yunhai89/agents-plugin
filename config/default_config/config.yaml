@@ -23,6 +23,7 @@ agent:
   progress: true            # 工具调用时推送节流进度消息（消除干等，默认开）
   reply:
     mode: image             # 回复渲染：image（markdown→精美浅色图片，默认）/ text（纯文本）；渲染失败自动退文本
+    atSender: true          # 群聊回复时艾特发言人（私聊不艾特）
   memoryLimits:
   systemPrompt:
   chatPermission: master
@@ -97,6 +98,10 @@ agent:
     excludeDirs: []          # 目录黑名单（不复制进 images/）
     excludeKeywords: []      # 文件名关键词黑名单（追加在内置表之上）
     listTopN: 30             # prompt 注入清单条数上限
+  calc:
+    enable: true            # Python 精确计算工具（数学/统计/大数等，沙箱执行，避免模型心算出错）
+    python: "python3"       # python 可执行文件（容器内路径不同可改，如 /usr/sbin/python3）
+    timeout: 10             # 单次计算超时（秒，防死循环）
   terminal:
     # ⚠️ 高危：shell 可执行任意主机命令，防护（allowlist/黑名单/审批）无法 100% 保证安全。
     # enable: true 即表示你知晓风险、同意自担后果，与开发者无关。默认关闭。
