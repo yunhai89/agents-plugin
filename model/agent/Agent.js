@@ -42,6 +42,14 @@ function brief(v, n = 160) {
   return s.length > n ? s.slice(0, n) + `…(+${s.length - n})` : s
 }
 
+/** 判定工具结果是否为失败形态：{"error":...}（stringifyArgs 后的 JSON 键） */
+function isToolError(content) {
+  return typeof content === 'string' && /"error"\s*:/.test(content)
+}
+
+/** 失败回灌提示：附在错误 tool 结果后，引导模型据实回复、勿臆测编造 */
+const TOOL_FAIL_HINT = '\n[系统提示] 以上是工具返回的真实失败原因。请据此如实回复用户（可转译/精简），切勿臆测或编造其它原因；若错误指出了可重试方向（如缺参数、权限不足、网络不可达、需先查 id），可换方式重试或指导用户操作。'
+
 export class Agent {
   constructor(config = {}) {
     if (!config.provider) throw new Error('Agent 需要 provider')
@@ -477,6 +485,9 @@ export class Agent {
         }
       }
     }
+    // 失败回灌：工具返回/抛出错误时，在回灌给模型的 tool 结果里附明确指令——
+    // 让模型据实转告用户真实错误，而非忽略错误去臆测/编造失败原因（杜绝"schema bug"式瞎编）
+    if (isToolError(content)) content = content + TOOL_FAIL_HINT
     cb.onToolEnd?.(tc, content)
     return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
   }
