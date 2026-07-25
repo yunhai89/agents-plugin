@@ -105,12 +105,17 @@ function selfStatus(runtime, cfg) {
 }
 
 /** 拉取群内近期聊天记录 → "昵称: 文本" 正序行（适配器通常逆序返回，已翻转；失败返回空数组，不抛错） */
-async function fetchGroupHistoryLines({ e, bot, groupId, count }) {
+async function fetchGroupHistoryLines({ e, bot, groupId, count, ctx }) {
   const g = e?.group || bot?.pickGroup?.(groupId) || null
   if (!g?.getChatHistory) return []
   try {
     const seq = e?.seq ?? e?.message_id ?? e?.source?.seq ?? undefined
-    const msgs = await g.getChatHistory(seq, count)
+    let msgs = await g.getChatHistory(seq, count)
+    // 数据隔离（默认开）：仅当前用户自己的群发言，避免读到他人记录（多用户串档）
+    if (ctx?.isolation) {
+      const me = e?.user_id != null ? String(e.user_id) : null
+      if (me) msgs = [].concat(msgs).filter((m) => m && String(m.user_id) === me)
+    }
     return formatHistory(msgs, e, count)
   } catch { return [] }
 }
@@ -140,7 +145,7 @@ async function recentHistory({ ctx, e, kv, bot, historyCount }) {
     } catch { /* noop */ }
   }
   // 历史
-  const lines = await fetchGroupHistoryLines({ e, bot, groupId: gid, count: historyCount })
+  const lines = await fetchGroupHistoryLines({ e, bot, groupId: gid, count: historyCount, ctx })
   if (lines.length) parts.push(`${isFirst ? '入群近期对话' : '久未发言后的近期对话'}：\n${lines.join('\n')}`)
   // 标记已感知
   try { await kv.set(`${MET_PREFIX}${gid}`, { at: now }) } catch { /* noop */ }
@@ -167,7 +172,7 @@ export async function buildSituationalContext({ ctx, runtime, e, kv, cfg, bot, h
     const sparseThreshold = cfg?.perception?.sparseThreshold ?? 6
     const sparseEnabled = cfg?.perception?.sparseInject !== false
     if (sparseEnabled && ctx?.isGroup && ctx?.groupId && Number.isFinite(sessionLen) && sessionLen < sparseThreshold) {
-      const lines = await fetchGroupHistoryLines({ e, bot: bot || ctx?.bot, groupId: ctx.groupId, count: historyCount }).catch(() => [])
+      const lines = await fetchGroupHistoryLines({ e, bot: bot || ctx?.bot, groupId: ctx.groupId, count: historyCount, ctx }).catch(() => [])
       if (lines.length) {
         parts.push(`【近期群聊补全】当前会话上下文较少，以下是群内最近对话（如仍不够，可调用 get_chat_history 工具拉取更多）：\n${lines.join('\n')}`)
       }

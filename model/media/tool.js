@@ -13,7 +13,52 @@
  *  - read_attachment （query）      读取本次会话已主动收集的附件
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { resolveMedia, isTextLike, isTextLike as _isText, truncateText, mimeFromName } from './resolve.js'
+import { excelBufferToText } from '../document/excel.js'
+
+const TEMP_DIR = () => path.join(process.cwd(), 'temp', 'agents-plugin')
+
+/** 把二进制办公文档落到临时文件，返回路径（供 read_excel/read_pdf 等工具消费） */
+function writeTempFile(mf) {
+  fs.mkdirSync(TEMP_DIR(), { recursive: true })
+  let ext = mf.ext || path.extname(mf.name || '') || '.bin'
+  if (!ext.startsWith('.')) ext = `.${ext}`
+  const fname = `att_${Date.now().toString(36)}${ext}`
+  const p = path.join(TEMP_DIR(), fname)
+  fs.writeFileSync(p, mf.buffer)
+  return p
+}
+
+/**
+ * 解析办公文档类附件（xlsx/csv/pdf/docx）→ 落盘 + 直接返回可读内容/路径。
+ * 问题3：用户发 Excel 时让模型一步拿到表格文本，无需再链式调 read_excel（也不再有"读不了"）。
+ * @returns {Promise<object|null>} 解析结果；非办公文档返回 null（交由上层走默认二进制分支）
+ */
+async function parseOfficeDoc(mf) {
+  const ext = (mf.ext || path.extname(mf.name || '') || '').toLowerCase()
+  const mime = (mf.mime || '').toLowerCase()
+  const isXlsx = ext === '.xlsx' || ext === '.xls' || mime.includes('spreadsheet')
+  const isPdf = ext === '.pdf' || mime === 'application/pdf'
+  const isDocx = ext === '.docx' || ext === '.doc' || mime.includes('wordprocessing') || mime.includes('msword') || mime.includes('officedocument.wordprocessing')
+  if (!isXlsx && !isPdf && !isDocx) return null
+  let p
+  try { p = writeTempFile(mf) } catch (e) { return { name: mf.name, mime: mf.mime, error: `落盘失败：${e?.message || e}` } }
+  const base = { name: mf.name, mime: mf.mime, size: mf.bytes, path: p }
+  if (isXlsx) {
+    try {
+      const out = await excelBufferToText(mf.buffer, { maxRows: 50 })
+      return out.error ? { ...base, ...out } : { ...base, ...out }
+    } catch (e) {
+      return { ...base, error: `Excel 解析失败：${e?.message || e}（文件路径 ${p}，可改用 read_excel 重试）` }
+    }
+  }
+  if (isPdf) {
+    return { ...base, note: 'PDF 已落盘到上述 path，可调用 read_pdf 工具按路径读取文本与页面图片。' }
+  }
+  return { ...base, note: 'Word 文档已落盘到上述 path；暂无内置 docx 文本解析器（表格类可转 xlsx 后再用 read_excel）。' }
+}
 
 function noFs(ctx) {
   return { error: '当前会话不支持群文件操作（需在群内且协议端提供 fs.ls/download）' }
@@ -102,8 +147,9 @@ export const getGroupFileTool = {
 
 export const readAttachmentTool = {
   name: 'read_attachment',
-  description: '读取本次对话用户已发送（被自动收集）的附件内容。文本类（txt/csv/json/代码等）返回内容；图片/二进制返回元信息（图片已在对话上下文中随消息发送，通常无需再读）。',
+  description: '读取本次对话用户已发送（被自动收集）的附件内容。文本类（txt/csv/json/代码等）直接返回内容；Excel(.xlsx/.xls) 直接解析为表格文本；PDF/Word 落盘后返回路径（可再调 read_pdf）。何时用：用户发送了文件让你查看/分析/统计时，优先用本工具（无需知道文件路径）。图片已在对话上下文中随消息发送，通常无需再读。',
   category: 'query',
+  meta: { summary: '读取附件内容', resultCap: 8000 },
   parameters: {
     type: 'object',
     properties: {
@@ -123,6 +169,9 @@ export const readAttachmentTool = {
     if (isTextLike(mf.mime)) {
       return { name: mf.name, size: mf.bytes, mime: mf.mime, content: truncateText(mf.buffer) }
     }
+    // 办公文档（xlsx/pdf/docx）：落盘 + 解析（问题3）
+    const parsed = await parseOfficeDoc(mf)
+    if (parsed) return parsed
     return { name: mf.name, size: mf.bytes, mime: mf.mime, source: mf.source, note: '图片/二进制附件已随消息进入上下文，无需重复读取。' }
   },
 }

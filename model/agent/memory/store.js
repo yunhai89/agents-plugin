@@ -3,13 +3,14 @@
  *
  * 设计要点：
  *  - 双 store：memory（Agent 笔记，默认 2200 字符）/ user（用户画像，默认 1375 字符）。
- *  - **持久化为 Markdown**（MEMORY.md / USER.md）：人可读、可编辑、可 diff。每条 = 一行 `- ` bullet。
- *  - 旧 memory.json/user.json 自动迁移为 .md（一次性、幂等）。
- *  - snapshot 渲染为「LABEL [用量] + bullets」注入 system prompt（模型看到可读条目）。
- *  - 不自动合并：写超限 → 抛 MemoryLimitError（附用量与条目），由 Agent 自行 replace/remove 后重试。
+ *  - **按 scopeId 隔离**：每个数据归属(scope)一个独立目录 `memories/<scopeId>/MEMORY.md`+`USER.md`。
+ *    apps/agent.js 按「群+用户」(isolation 开)或「群」(关) 计算 scopeId 传入，实现多用户完全隔离。
+ *  - **持久化为 Markdown**：人可读、可编辑、可 diff。每条 = 一行 `- ` bullet。
+ *  - 旧 memory.json/user.json 自动迁移为 .md（一次性、幂等，按 scope）。
+ *  - snapshot 渲染为「LABEL [用量] + bullets」注入 system prompt。
+ *  - 不自动合并：写超限 → 抛 MemoryLimitError，由 Agent 自行 replace/remove 后重试。
  *  - 重复预防：完全重复条目 → no-op。
- *  - 库解耦：只接收 dir，不依赖插件 Config；由 apps/ 注入路径。
- *  - add/replace/remove/batch 语义不变（仍操作内存条目数组，落盘时渲染 .md）。
+ *  - 库解耦：只接收 dir，不依赖插件 Config；由 apps/ 注入路径与 scopeId。
  */
 
 import fs from 'node:fs'
@@ -24,6 +25,8 @@ const LABELS = {
 }
 // 文件名：人可读的规范名
 const FILES = { memory: 'MEMORY.md', user: 'USER.md' }
+// 无 scopeId 时的兜底（保持向后兼容；正常路径都由 apps 传入 scopeId）
+const DEFAULT_SCOPE = '__global__'
 
 export class MemoryLimitError extends Error {
   constructor({ target, used, limit, entries }) {
@@ -76,18 +79,23 @@ export class MemoryStore {
     this.dir = dir
     this.limits = { ...DEFAULT_LIMITS, ...limits }
     this.enabled = { memory: true, user: true, ...enabled }
-    this.state = { memory: [], user: [] }
-    this.load()
+    /** @type {Map<string, {state:{memory:string[],user:string[]}}>} 按 scopeId 懒加载缓存 */
+    this._scopes = new Map()
+  }
+
+  /** scopeId → 目录（scopeId 由 apps 保证 fs-safe：u_xxx / g{gid}_u{uid} / g{gid}） */
+  _scopeDir(scopeId) {
+    return path.join(this.dir, String(scopeId || DEFAULT_SCOPE))
   }
 
   /** .md 文件路径（规范名） */
-  _file(target) {
-    return path.join(this.dir, FILES[target] || `${target}.md`)
+  _file(target, scopeId) {
+    return path.join(this._scopeDir(scopeId), FILES[target] || `${target}.md`)
   }
 
   /** 旧 .json 文件路径（迁移用） */
-  _legacyFile(target) {
-    return path.join(this.dir, `${target}.json`)
+  _legacyFile(target, scopeId) {
+    return path.join(this._scopeDir(scopeId), `${target}.json`)
   }
 
   /**
@@ -134,125 +142,149 @@ export class MemoryStore {
     return `${head}\n${bullets}\n`
   }
 
-  /** 读取磁盘到内存：优先 .md；缺失则迁移旧 .json → .md */
-  load() {
-    this.state = { memory: [], user: [] }
-    try { fs.mkdirSync(this.dir, { recursive: true }) } catch { /* noop */ }
-    let migrated = []
+  /**
+   * 取（必要时加载）某 scope 的内存状态。每个 scope 独立目录，互不串档。
+   * 首次访问该 scope 时从磁盘读取（缺失则迁移旧 .json → .md，再缺失则空）。
+   */
+  _getScope(scopeId) {
+    const id = String(scopeId || DEFAULT_SCOPE)
+    let sc = this._scopes.get(id)
+    if (sc) return sc
+    const state = { memory: [], user: [] }
+    try { fs.mkdirSync(this._scopeDir(id), { recursive: true }) } catch { /* noop */ }
     for (const target of ['memory', 'user']) {
       if (!this.enabled[target]) continue
-      const mdFile = this._file(target)
+      const mdFile = this._file(target, id)
       try {
         if (fs.existsSync(mdFile)) {
-          this.state[target] = this._parseMd(fs.readFileSync(mdFile, 'utf8'))
+          state[target] = this._parseMd(fs.readFileSync(mdFile, 'utf8'))
           continue
         }
       } catch { /* 解析失败保持空 */ }
-      // 迁移旧 .json
-      const jsonFile = this._legacyFile(target)
+      // 迁移旧 .json（本 scope 目录内）
+      const jsonFile = this._legacyFile(target, id)
       try {
         if (fs.existsSync(jsonFile)) {
           const arr = JSON.parse(fs.readFileSync(jsonFile, 'utf8'))
           if (Array.isArray(arr)) {
-            this.state[target] = arr.filter((e) => typeof e === 'string')
-            this._save(target)
+            state[target] = arr.filter((e) => typeof e === 'string')
+            this._save(target, id, state[target])
             try { fs.unlinkSync(jsonFile) } catch { /* noop */ }
-            migrated.push(target)
           }
         }
       } catch { /* noop */ }
     }
-    return this
+    sc = { state }
+    this._scopes.set(id, sc)
+    return sc
   }
 
   /** 原子写盘：tmp + rename */
-  _save(target) {
+  _save(target, scopeId, entries) {
     try {
-      fs.mkdirSync(this.dir, { recursive: true })
+      fs.mkdirSync(this._scopeDir(scopeId), { recursive: true })
     } catch {
       /* noop */
     }
-    const file = this._file(target)
+    const file = this._file(target, scopeId)
     const tmp = `${file}.tmp`
-    fs.writeFileSync(tmp, this._renderMd(target, this.state[target]))
+    fs.writeFileSync(tmp, this._renderMd(target, entries))
     fs.renameSync(tmp, file)
   }
 
+  /** 刷盘所有已加载 scope */
   flush() {
-    for (const target of ['memory', 'user']) if (this.enabled[target]) this._save(target)
+    for (const [id, sc] of this._scopes) {
+      for (const target of ['memory', 'user']) if (this.enabled[target]) this._save(target, id, sc.state[target])
+    }
   }
 
+  /** 清缓存重新读盘（下次访问各 scope 时按需重载） */
   reload() {
-    return this.load()
+    this._scopes.clear()
+    return this
   }
 
-  getEntries(target) {
-    return [...(this.state[target] || [])]
+  getEntries(target, scopeId) {
+    return [...(this._getScope(scopeId).state[target] || [])]
   }
 
-  used(target) {
-    return joinedLen(this.state[target] || [])
+  used(target, scopeId) {
+    return joinedLen(this._getScope(scopeId).state[target] || [])
   }
 
-  ratio(target) {
-    return this.used(target) / this.limits[target]
+  ratio(target, scopeId) {
+    return this.used(target, scopeId) / this.limits[target]
   }
 
   _ensure(target) {
-    if (!(target in this.state)) throw new Error(`未知 memory target：${target}（应为 memory 或 user）`)
+    if (!(target === 'memory' || target === 'user')) throw new Error(`未知 memory target：${target}（应为 memory 或 user）`)
     if (!this.enabled[target]) throw new Error(`记忆 ${target} 已禁用`)
   }
 
   /** 提交前做超限检查；超限抛 MemoryLimitError（不改状态） */
-  _commit(target, newArr) {
+  _commit(target, scopeId, newArr) {
     const used = joinedLen(newArr)
     const limit = this.limits[target]
     if (used > limit) {
       throw new MemoryLimitError({ target, used, limit, entries: newArr })
     }
-    this.state[target] = newArr
-    this._save(target)
+    const sc = this._getScope(scopeId)
+    sc.state[target] = newArr
+    this._save(target, scopeId, newArr)
     return { ok: true, target, used, limit, count: newArr.length }
   }
 
-  add(target, text) {
+  add(target, text, scopeId) {
     this._ensure(target)
-    const arr = this.state[target]
+    const arr = this._getScope(scopeId).state[target]
     if (arr.includes(text)) return { ok: true, duplicate: true, message: 'no duplicate added', target }
-    return this._commit(target, applyOp(arr, { action: 'add', text }))
+    return this._commit(target, scopeId, applyOp(arr, { action: 'add', text }))
   }
 
-  replace(target, oldText, newText) {
+  replace(target, oldText, newText, scopeId) {
     this._ensure(target)
-    return this._commit(target, applyOp(this.state[target], { action: 'replace', old_text: oldText, new_text: newText }))
+    return this._commit(target, scopeId, applyOp(this._getScope(scopeId).state[target], { action: 'replace', old_text: oldText, new_text: newText }))
   }
 
-  remove(target, oldText) {
+  remove(target, oldText, scopeId) {
     this._ensure(target)
-    return this._commit(target, applyOp(this.state[target], { action: 'remove', old_text: oldText }))
+    return this._commit(target, scopeId, applyOp(this._getScope(scopeId).state[target], { action: 'remove', old_text: oldText }))
   }
 
   /** 原子批量：在一份数组上顺序应用全部 op，全部成功且不超限才提交（否则不改动） */
-  batch(target, operations) {
+  batch(target, operations, scopeId) {
     this._ensure(target)
     if (!Array.isArray(operations)) throw new Error('batch 需要 operations 数组')
-    let arr = [...this.state[target]]
+    let arr = [...this._getScope(scopeId).state[target]]
     const summary = []
     for (const op of operations) {
       const before = arr.length
       arr = applyOp(arr, op)
       summary.push({ op: op.action || op.op, delta: arr.length - before })
     }
-    return { ...this._commit(target, arr), operations: summary }
+    return { ...this._commit(target, scopeId, arr), operations: summary }
   }
 
   /** 渲染注入 system prompt 的快照（LABEL 用量头 + bullets，模型可读） */
-  snapshot(target) {
+  snapshot(target, scopeId) {
     if (!this.enabled[target]) return ''
-    return this._renderMd(target, this.state[target] || []).trim()
+    return this._renderMd(target, this._getScope(scopeId).state[target] || []).trim()
   }
 
-  snapshotAll() {
-    return ['memory', 'user'].map((t) => this.snapshot(t)).filter(Boolean).join('\n\n')
+  snapshotAll(scopeId) {
+    return ['memory', 'user'].map((t) => this.snapshot(t, scopeId)).filter(Boolean).join('\n\n')
+  }
+
+  /** 清空某 scope 的全部声明式记忆（#清空所有记录 用；同步内存缓存与磁盘文件） */
+  clear(scopeId) {
+    const id = String(scopeId || DEFAULT_SCOPE)
+    const sc = this._scopes.get(id)
+    if (sc) sc.state = { memory: [], user: [] }
+    for (const target of ['memory', 'user']) {
+      if (!this.enabled[target]) continue
+      try { fs.unlinkSync(this._file(target, id)) } catch { /* 文件不存在忽略 */ }
+    }
+    return { ok: true, scope: id }
   }
 }

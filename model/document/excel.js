@@ -115,6 +115,34 @@ export const createExcelTool = {
   },
 }
 
+/**
+ * 把 xlsx 字节解析为 markdown 表格文本（read_excel 与 read_attachment 共用，DRY）。
+ * @param {Buffer} buffer xlsx 文件字节
+ * @param {object} opts { sheet, maxRows }
+ * @returns {Promise<object>} { sheets, currentSheet, totalRows, totalCols, text } 或 { error }
+ */
+export async function excelBufferToText(buffer, { sheet, maxRows = 50 } = {}) {
+  const ExcelJS = await getExcelJS()
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(buffer)
+  const sheetNames = wb.worksheets.map((ws) => ws.name)
+  let ws = wb.worksheets[0]
+  if (sheet != null) ws = wb.worksheets[Number(sheet) - 1] || wb.getWorksheet(String(sheet)) || ws
+  if (!ws) return { sheets: sheetNames, error: '无工作表' }
+  const mr = Math.min(500, Math.max(1, Number(maxRows) || 50))
+  const lines = []
+  let n = 0
+  ws.eachRow({ includeEmpty: false }, (row, rowNum) => {
+    if (n >= mr) return
+    const cells = []
+    row.eachCell({ includeEmpty: true }, (cell) => cells.push(fmtCell(cell.value)))
+    lines.push(`| ${cells.join(' | ')} |`)
+    if (rowNum === 1) lines.push(`| ${cells.map(() => '---').join(' | ')} |`)
+    n++
+  })
+  return { sheets: sheetNames, currentSheet: ws.name, totalRows: ws.rowCount, totalCols: ws.columnCount, text: lines.join('\n') }
+}
+
 /** read_excel：读取 xlsx → markdown 表格文本（供模型分析） */
 export const readExcelTool = {
   name: 'read_excel',
@@ -133,30 +161,10 @@ export const readExcelTool = {
   async execute(params) {
     const p = String(params?.path || '').trim()
     if (!p || !fs.existsSync(p)) return { error: `文件不存在：${p}` }
-    const maxRows = Math.min(500, Math.max(1, Number(params?.maxRows) || 50))
-
-    const ExcelJS = await getExcelJS()
-    const wb = new ExcelJS.Workbook()
-    await wb.xlsx.readFile(p)
-
-    const sheetNames = wb.worksheets.map((ws) => ws.name)
-    const sp = params?.sheet
-    let ws = wb.worksheets[0]
-    if (sp != null) ws = wb.worksheets[Number(sp) - 1] || wb.getWorksheet(String(sp)) || ws
-    if (!ws) return { error: '无工作表' }
-
-    const lines = []
-    let n = 0
-    ws.eachRow({ includeEmpty: false }, (row, rowNum) => {
-      if (n >= maxRows) return
-      const cells = []
-      row.eachCell({ includeEmpty: true }, (cell) => cells.push(fmtCell(cell.value)))
-      lines.push(`| ${cells.join(' | ')} |`)
-      if (rowNum === 1) lines.push(`| ${cells.map(() => '---').join(' | ')} |`)
-      n++
-    })
-
-    return { sheets: sheetNames, currentSheet: ws.name, totalRows: ws.rowCount, totalCols: ws.columnCount, text: lines.join('\n') }
+    let buf
+    try { buf = fs.readFileSync(p) } catch (e) { return { error: `读取失败：${e?.message || e}` } }
+    const out = await excelBufferToText(buf, { sheet: params?.sheet, maxRows: params?.maxRows })
+    return out.error ? out : { ...out, path: p }
   },
 }
 

@@ -434,13 +434,28 @@ function ctxOf(e) {
   let role = 'member'
   if (e.member?.is_owner) role = 'owner'
   else if (e.member?.is_admin) role = 'admin'
+  const userId = String(e.user_id)
+  const groupId = e.group_id ? String(e.group_id) : null
+  const isGroup = !!e.isGroup
+  // —— 数据隔离 scope 身份 ——
+  // isolation=true（默认）: 每(群,用户)独立；false: 同群共享（群体型 bot）；跨群始终隔离；私聊始终按用户。
+  // userId=真实用户(个人功能/get_chat_history 自过滤/回复@)；scopeUserId=session/recall 键；scopeId=MemoryStore 文件目录。
+  const isolation = Config.get().agent?.isolation?.enable !== false
+  const sharedGroup = !!(isGroup && groupId && !isolation)
+  const scopeUserId = sharedGroup ? '__group__' : userId
+  const scopeId = !isGroup
+    ? `u_${userId}`
+    : (isolation ? `g${groupId}_u${userId}` : `g${groupId}`)
   return {
     role,
     isMaster,
-    userId: String(e.user_id),
-    groupId: e.group_id ? String(e.group_id) : null,
-    isGroup: !!e.isGroup,
+    userId,
+    groupId,
+    isGroup,
     isGroupAdmin: !!(e.member?.is_admin || e.member?.is_owner),
+    isolation,
+    scopeUserId,
+    scopeId,
     notify: (id, info) => notifyMaster(e, id, info),
     conversationId: null,
     // 媒体被动工具（list_group_files/get_group_file/read_attachment）需读取实时事件与 Bot 句柄
@@ -552,11 +567,21 @@ export class Chat extends plugin {
     const isAt = !!this.e.atBot
     const cmdRe = new RegExp(`^${cmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\s|$)`)
     const isCmd = cmdMode && cmdRe.test(text)
-    if (!((atMode && isAt && text) || isCmd)) return false
+    const hasMedia = this._hasMedia(this.e)
+    // 触发条件：命令匹配 ｜（@机器人 且（有文字 或 有媒体））。
+    // 关键：纯引用图片/文件无文字也算触发（问题4）—— 媒体由 _handleAgent 注入默认指令处理。
+    if (!(isCmd || (atMode && isAt && (text || hasMedia)))) return false
     const input = isCmd ? text.replace(cmdRe, '').trim() : text
-    if (!input) return false
-    Log.mark('[trigger]', `user=${this.e.user_id} gid=${this.e.group_id || '-'} mode=${isCmd ? 'cmd' : 'at'} inputLen=${input.length}`)
+    if (!input && !hasMedia) return false // 既无文字又无媒体（如裸 `#ai`）：不触发
+    Log.mark('[trigger]', `user=${this.e.user_id} gid=${this.e.group_id || '-'} mode=${isCmd ? 'cmd' : 'at'} inputLen=${input.length} media=${hasMedia}`)
     return this._handleAgent(input)
+  }
+
+  /** 轻量探测：消息是否含图片/文件/音视频段，或引用了某条消息（引用的媒体由 collectActive 兜底拉取）。不发网络请求。 */
+  _hasMedia(e) {
+    const segs = e?.message
+    const hasSeg = Array.isArray(segs) && segs.some((s) => s && ['image', 'file', 'record', 'video', 'flash'].includes(s.type))
+    return !!(hasSeg || e?.reply_id != null)
   }
 
   async _handleAgent(text) {
@@ -569,7 +594,7 @@ export class Chat extends plugin {
     }
     const cfg = Config.get().agent || {}
     const ctx = ctxOf(this.e)
-    ctx.conversationId = await rt.session.getActiveConversation(ctx.userId, ctx.groupId)
+    ctx.conversationId = await rt.session.getActiveConversation(ctx.scopeUserId, ctx.groupId)
 
     // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
     const protocol = cfg.protocol || 'openai'
@@ -587,6 +612,7 @@ export class Chat extends plugin {
       log: (m) => (/失败|未能|异常/.test(m) ? Log.warn('[media]', m) : Log.debug('[media]', m)),
     })
     let input = text
+    let blindImage = false // 收集到图片但模型无法识别（主模型无视觉 + 未被 vision 子模型转成文本）—— 防臆测
     try {
       let files = await media.collectActive()
       const nImg = files.filter((f) => f.kind === 'image' || (f.mime || '').startsWith('image/')).length
@@ -601,9 +627,22 @@ export class Chat extends plugin {
         }
       }
       ctx.media = files // 供 read_attachment 等被动工具读取
-      const content = media.buildContent(text)
+      // 盲图判定（问题1）：有图片，主模型无视觉，且这些图片没被 vision 子模型转成文本（__visionDescribed）
+      if (nImg > 0 && !caps.vision) {
+        const rawImageLeft = files.some((f) => (f.kind === 'image' || (f.mime || '').startsWith('image/')) && f.buffer && !f.__visionDescribed)
+        blindImage = rawImageLeft
+        if (blindImage) Log.warn('[vision] 用户发送了图片但当前无法识别（主模型无视觉，未配 agent.vision.model）；将提示用户而非臆测')
+      }
+      // 纯媒体无文字：注入默认指令（问题4）；既无文字又无媒体：提示而非空跑
+      const effText = text || (files.length ? '（我发了一张图片/文件给你，请查看并告诉我内容，或按需处理）' : '')
+      if (!effText) {
+        await this.e.reply('未识别到文字或图片/文件内容（引用的图片可能获取失败），请重新发送或补充说明。')
+        return true
+      }
+      const content = media.buildContent(effText)
       if (Array.isArray(content)) input = { role: 'user', content, _media: true }
-      if (files.length) Log.debug('[chat]', `media files=${files.length} images=${nImg} vision=${!!caps.vision} multimodal=${Array.isArray(content)}`)
+      else input = effText
+      if (files.length) Log.debug('[chat]', `media files=${files.length} images=${nImg} vision=${!!caps.vision} blind=${blindImage} multimodal=${Array.isArray(content)}`)
     } catch (e) {
       Log.warn('[media] 主动收集失败，回退纯文本', e?.message || e)
     }
@@ -636,6 +675,11 @@ export class Chat extends plugin {
       context = [perception, skillText].filter(Boolean).join('\n\n') || undefined
     } catch (e) {
       Log.warn('[perception/skill] 注入失败', e?.message || e)
+    }
+    // 盲图防臆测（问题1）：模型看不到图时，明确告知"无法识别"，杜绝从历史/上下文臆测图片内容
+    if (blindImage) {
+      const warn = '【系统提示】用户发送了图片，但当前未配置视觉模型（agent.vision.model 为空）且主模型不支持视觉，无法识别图片内容。请如实告知用户暂时无法识别图片、建议配置视觉模型；切勿根据历史对话或上下文臆测图片内容。'
+      context = context ? `${context}\n\n${warn}` : warn
     }
 
     Log.mark('[chat]', `user=${ctx.userId} gid=${ctx.groupId || '-'} conv=${ctx.conversationId} model=${cfg.model} persona=${personaId || 'default'} vision=${caps.vision ? 'on' : 'off'} thinking=${cfg.thinking ? 'on' : 'off'}${context ? ` ctx=${String(context).length}字` : ''}`)
@@ -703,8 +747,8 @@ export class Chat extends plugin {
   async chatList() {
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const list = await rt.session.listConversations(ctx.userId, ctx.groupId)
-    const activeId = await rt.session.getActiveConversation(ctx.userId, ctx.groupId)
+    const list = await rt.session.listConversations(ctx.scopeUserId, ctx.groupId)
+    const activeId = await rt.session.getActiveConversation(ctx.scopeUserId, ctx.groupId)
     const html = buildChatListHtml({ user: ctx.userId, conversations: list, activeId })
     const img = await screenshot('agents-plugin/chat-list', html)
     if (img) return this.e.reply(img), true
@@ -717,7 +761,7 @@ export class Chat extends plugin {
     const id = this.e.msg.match(/\d+/)?.[0]
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const ok = await rt.session.setActiveConversation(ctx.userId, ctx.groupId, id)
+    const ok = await rt.session.setActiveConversation(ctx.scopeUserId, ctx.groupId, id)
     await this.e.reply(ok ? `已切换到对话 #${id}` : `未找到对话 #${id}，发送 #聊天列表 查看`)
     return true
   }
@@ -725,7 +769,7 @@ export class Chat extends plugin {
   async newChat() {
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const conv = await rt.session.createConversation(ctx.userId, ctx.groupId)
+    const conv = await rt.session.createConversation(ctx.scopeUserId, ctx.groupId)
     await this.e.reply(`已新建对话 #${conv.id}（${conv.title}），后续消息在此对话中继续`)
     return true
   }
@@ -915,8 +959,8 @@ export class Chat extends plugin {
   async showMemory() {
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const list = await rt.recall.listByUser(ctx.userId)
-    const text = list.length ? rt.recall.formatForPrompt(list.slice(0, 20)) : rt.memory.snapshotAll()
+    const list = await rt.recall.listByUser(ctx.scopeUserId)
+    const text = list.length ? rt.recall.formatForPrompt(list.slice(0, 20)) : rt.memory.snapshotAll(ctx.scopeId)
     await this.e.reply((text || '(记忆为空)').slice(0, 4000))
     return true
   }
@@ -925,7 +969,7 @@ export class Chat extends plugin {
     const kw = this.e.msg.replace(/^#忘掉\s+/, '').trim()
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const n = await rt.recall.forget(ctx.userId, kw)
+    const n = await rt.recall.forget(ctx.scopeUserId, kw)
     await this.e.reply(n ? `已遗忘 ${n} 条含「${kw}」的记忆` : `未找到含「${kw}」的记忆`)
     return true
   }
@@ -952,6 +996,8 @@ export class Chat extends plugin {
   async clearMyData() {
     const rt = await getRuntime()
     const uid = String(this.e.user_id)
+    const ctx = ctxOf(this.e)
+    const sharedGroup = ctx.scopeUserId === '__group__' // 关闭隔离的群聊：会话/记忆为群共享，不清（避免一人清空全群）
     const now = Date.now()
     const last = _clearPending.get(uid)
     if (!last || now - last > 60000) {
@@ -963,6 +1009,7 @@ export class Chat extends plugin {
         '· 个人笔记',
         '· 提醒',
         '· 人设绑定（恢复默认）',
+        ...(sharedGroup ? ['（当前为「群共享」模式，群共享的对话/记忆不在此次清理范围）'] : []),
         '',
         '**不删除配置文件**。60 秒内再发一次「#清空所有记录」执行。',
       ].join('\n'))
@@ -971,20 +1018,22 @@ export class Chat extends plugin {
     _clearPending.delete(uid)
     try {
       const cleared = []
-      // 会话：扫描该用户名下的所有 session 键
+      // 会话：扫描归属当前用户的 session 键（keyUid=该 key 的归属用户；ON=本人各群会话；群共享 '__group__' 跳过）
       const sessPrefix = 'Yz:agent:sess:'
       let nSess = 0
       for (const k of await rt.kv.scan(sessPrefix)) {
         const tail = String(k).slice(sessPrefix.length)
         const parts = tail.split(':')
-        const mine = parts[0] === 'conv'
-          ? (parts[1] === uid || ((parts[1] === 'active' || parts[1] === 'seq') && parts[2] === uid))
-          : (parts[parts.length - 1] === uid)
-        if (mine) { await rt.kv.del(k); nSess++ }
+        let keyUid = null
+        if (parts[0] === 'conv') keyUid = (parts[1] === 'active' || parts[1] === 'seq') ? parts[3] : parts[2]
+        else keyUid = parts[1] // 旧 group:user 会话 <gid>:<uid>
+        if (keyUid === uid && keyUid !== '__group__') { await rt.kv.del(k); nSess++ }
       }
       if (nSess) cleared.push(`对话历史(${nSess})`)
-      // 召回记忆
+      // 召回记忆（按真实 uid：ON=本人 recall；群共享 recall 在 '__group__' 下，不会被误清）
       await rt.recall.clearAll(uid); cleared.push('长期记忆')
+      // 声明式记忆（按 scopeId 隔离的 MEMORY.md/USER.md；群共享模式跳过）
+      if (!sharedGroup) { rt.memory.clear(ctx.scopeId); cleared.push('声明式记忆') }
       // 个人笔记
       await rt.kv.del(`Yz:agent:note:${uid}`); cleared.push('笔记')
       // 提醒
@@ -993,7 +1042,7 @@ export class Chat extends plugin {
       if (rems.length) cleared.push(`提醒(${rems.length})`)
       // 人设绑定
       await rt.persona.resetActive(uid); cleared.push('人设绑定')
-      await this.e.reply('✅ 已清空你的所有记录：' + cleared.join('、') + '\n（配置文件未动；MEMORY.md/USER.md 为全局共享记忆，未清——如需可手动删除 data/agents-plugin/memories/ 下文件）')
+      await this.e.reply('✅ 已清空你的所有记录：' + cleared.join('、') + '\n（配置文件未动）')
     } catch (e) {
       Log.error('[clear] 清空失败', e?.message || e)
       await this.e.reply(`清空失败：${e?.message || e}`)

@@ -133,12 +133,15 @@ export class Agent {
     }
 
     // session：加载历史（conversation 模式 or group:user 模式）
+    // scopeUserId = 数据归属身份（isolation 开=真实用户，关群聊=群共享占位），实现多用户隔离
+    const scopeUserId = ctx?.scopeUserId || ctx?.userId
+    const scopeId = ctx?.scopeId
     const useConv = !!(this.session && ctx && ctx.conversationId != null && typeof this.session.getConversation === 'function')
     let sessKey = null
     if (useConv) {
-      try { this.messages = await this.session.getConversation(ctx.userId, ctx.groupId, ctx.conversationId) } catch { this.messages = [] }
+      try { this.messages = await this.session.getConversation(scopeUserId, ctx.groupId, ctx.conversationId) } catch { this.messages = [] }
     } else if (this.session && ctx) {
-      sessKey = this.session.key(ctx.groupId, ctx.userId)
+      sessKey = this.session.key(ctx.groupId, scopeUserId)
       try { this.messages = await this.session.get(sessKey) } catch { this.messages = [] }
     }
     const sessStart = this.messages.length
@@ -146,10 +149,10 @@ export class Agent {
     // 追加 user 消息（保留多模态对象形态，仅替换文本内容）
     this.messages.push(this._buildUserMessage(input, userText))
 
-    // recall：检索注入
+    // recall：检索注入（按 scopeUserId 隔离：群共享模式下读群共享记忆）
     let memories = null
     if (this.recall && ctx) {
-      try { memories = await this.recall.retrieve(rawText, ctx.userId, this.recallTopK) } catch { memories = null }
+      try { memories = await this.recall.retrieve(rawText, scopeUserId, this.recallTopK) } catch { memories = null }
     }
 
     let usage = null
@@ -165,7 +168,7 @@ export class Agent {
     while (turns < this.maxTurns) {
       if (signal?.aborted) throw new Error('aborted')
 
-      const system = this._assembleSystem(memories, systemPromptOverride, context)
+      const system = this._assembleSystem(memories, systemPromptOverride, context, scopeId)
 
       if (this.contextPressureThreshold) {
         const est = this._estimateHistory(system)
@@ -256,16 +259,16 @@ export class Agent {
       this.logger('warn', `Agent 达到 maxTurns(${this.maxTurns})，提前结束`)
     }
 
-    // 持久化 session + 异步抽取记忆
+    // 持久化 session + 异步抽取记忆（按 scopeUserId 归属）
     if (useConv) {
-      try { await this.session.appendConversation(ctx.userId, ctx.groupId, ctx.conversationId, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
+      try { await this.session.appendConversation(scopeUserId, ctx.groupId, ctx.conversationId, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
     } else if (sessKey) {
       try { await this.session.append(sessKey, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'session 持久化失败', e) }
     }
     if (this.recall && ctx) {
       const snapshot = this.messages.slice()
       const llm = this.recallLlm || null
-      setImmediate(() => { try { this.recall.extractAndWrite(snapshot, ctx.userId, { llm }) } catch { /* noop */ } })
+      setImmediate(() => { try { this.recall.extractAndWrite(snapshot, scopeUserId, { llm }) } catch { /* noop */ } })
     }
 
     this.logger('mark', 'run end turns=', turns, 'stop=', stopReason, 'usage=', fmtUsage(usage), 'replyLen=', (lastContent || '').length, `totalMs=${Date.now() - __runStart}`)
@@ -301,7 +304,7 @@ export class Agent {
     return { role: 'user', content: text }
   }
 
-  _assembleSystem(memories, systemPromptOverride, context) {
+  _assembleSystem(memories, systemPromptOverride, context, scopeId) {
     // 结构化分层（稳定前缀 → 动态后缀）：身份 → 服务准则 → 执行取向 → 工具目录 → 技能 → 记忆 → 情境 → 安全
     const identity = systemPromptOverride || this.systemPrompt
     const toolCatalog = this.tools && this.tools.list().length ? buildToolCatalogSection(this.tools.list()) : ''
@@ -309,7 +312,8 @@ export class Agent {
     const stickerSection = this.stickers ? buildStickerPromptSection(this.stickers.catalog()) : ''
     let recalledMemory = ''
     if (this.recall && memories && memories.length) recalledMemory = this.recall.formatForPrompt(memories) || ''
-    const memorySnapshot = this.memory ? (this.memory.snapshotAll() || '') : ''
+    // 声明式记忆按 scopeId 隔离（每群每用户各自一份 MEMORY.md/USER.md）
+    const memorySnapshot = this.memory ? (this.memory.snapshotAll(scopeId) || '') : ''
     const guardHardening = this.guard ? (this.guard.systemHardening() || '') : ''
     return buildAgentSystemPrompt({
       identity,

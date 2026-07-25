@@ -30,7 +30,7 @@ export function makeRecallTool(recall) {
     async execute({ query, topK } = {}, ctx) {
       const q = String(query || '').trim()
       if (!q) return { error: '缺少 query' }
-      const userId = ctx?.userId
+      const userId = ctx?.scopeUserId || ctx?.userId
       if (!userId) return { error: '无用户上下文，无法检索记忆' }
       const hits = await recall.retrieve(q, userId, Math.max(1, Number(topK) || 5))
       if (!hits.length) return { found: 0, text: '未检索到相关长期记忆。' }
@@ -75,13 +75,14 @@ export function createMemoryTool(store) {
       },
       required: ['target', 'action'],
     },
-    async execute(params) {
+    async execute(params, ctx) {
       const { target, action } = params
+      const scopeId = ctx?.scopeId
       try {
-        if (action === 'add') return store.add(target, params.text)
-        if (action === 'replace') return store.replace(target, params.old_text, params.new_text)
-        if (action === 'remove') return store.remove(target, params.old_text)
-        if (action === 'batch') return store.batch(target, params.operations)
+        if (action === 'add') return store.add(target, params.text, scopeId)
+        if (action === 'replace') return store.replace(target, params.old_text, params.new_text, scopeId)
+        if (action === 'remove') return store.remove(target, params.old_text, scopeId)
+        if (action === 'batch') return store.batch(target, params.operations, scopeId)
         return { error: `未知 action：${action}` }
       } catch (e) {
         // 超限/匹配失败：结构化返回，便于模型在同一轮调整后重试

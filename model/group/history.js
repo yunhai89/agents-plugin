@@ -39,9 +39,14 @@ export const chatHistoryTool = {
     const count = Math.min(50, Math.max(1, Number(params.count) || 20))
     try {
       const seq = e?.seq ?? e?.message_id ?? e?.source?.seq ?? undefined
-      const msgs = await g.getChatHistory(seq, count)
+      let msgs = await g.getChatHistory(seq, count)
+      // 数据隔离（默认开）：仅返回当前用户自己的群发言，避免读到他人记录（多用户串档根因）
+      if (ctx?.isolation) {
+        const me = e?.user_id != null ? String(e.user_id) : null
+        if (me) msgs = [].concat(msgs).filter((m) => m && String(m.user_id) === me)
+      }
       const lines = formatHistory(msgs, e, count)
-      if (!lines.length) return { count: 0, note: '未取到聊天记录（协议端未返回或序列号无效）' }
+      if (!lines.length) return { count: 0, note: '未取到聊天记录（协议端未返回或序列号无效' + (ctx?.isolation ? '；当前为隔离模式，仅含你自己的发言' : '') + '）' }
       return { count: lines.length, history: lines.join('\n') }
     } catch (err) {
       return { error: `取聊天记录失败：${err?.message || err}` }
