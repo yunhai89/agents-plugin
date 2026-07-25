@@ -26,14 +26,14 @@
 
 import {
   defineTool, defineToolPack, getBot, getEvent, getGroup, getFriend, getMember,
-  param, ok, fail, markdown, roleRank, VALID_CATEGORIES,
+  sendApi, groupIdOf, param, ok, fail, markdown, roleRank, VALID_CATEGORIES,
 } from './define.js'
 import { loadToolPacks, asPack } from './loader.js'
 
 export {
   defineTool, defineToolPack,
   getBot, getEvent, getGroup, getFriend, getMember,
-  param, ok, fail, markdown, roleRank, VALID_CATEGORIES,
+  sendApi, groupIdOf, param, ok, fail, markdown, roleRank, VALID_CATEGORIES,
   loadToolPacks, asPack,
 }
 export { sendImage, sendVoice, sendVideo, sendFile, sendText } from './media.js'

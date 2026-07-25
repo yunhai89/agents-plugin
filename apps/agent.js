@@ -31,7 +31,7 @@ import { presets as anthropicPresets } from '../model/anthropic/index.js'
 import { McpManager } from '../model/mcp/index.js'
 import { createMediaService, makeMediaTools } from '../model/media/index.js'
 import { detectCapabilities } from '../model/llm/capabilities.js'
-import { groupInfoTools, groupManageTools, groupHistoryTools } from '../model/group/index.js'
+import { groupInfoTools, groupManageTools, groupHistoryTools, groupNoticeTools, groupFileTools, aiVoiceTools, forwardTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
 import { loadToolPacks } from '../model/toolkit/index.js'
 import { createSearchManager, makeSearchTools } from '../model/search/index.js'
@@ -83,6 +83,27 @@ const PROGRESS_LABELS = {
   miyoushe_search: '🎮 查米游社',
   memory: '📝 更新记忆',
   memory_search: '🧠 检索记忆',
+  // 群公告
+  send_group_notice: '📢 发群公告',
+  get_group_notice: '📢 查群公告',
+  delete_group_notice: '📢 删群公告',
+  // 群文件 CRUD
+  upload_group_file: '📤 上传群文件',
+  delete_group_file: '🗑️ 删群文件',
+  create_group_folder: '📂 建文件夹',
+  delete_group_folder: '🗑️ 删文件夹',
+  list_group_folder: '📂 列群文件',
+  get_group_file_url: '🔗 取文件直链',
+  move_group_file: '📂 移动文件',
+  rename_group_file: '📂 重命名',
+  transfer_group_file: '📂 跨群转发',
+  // AI 语音
+  get_ai_characters: '🎙️ 查语音角色',
+  ai_tts: '🎙️ 合成语音',
+  send_group_ai_record: '🎙️ 发AI语音',
+  // 合并转发
+  send_forward_msg: '📦 合并转发',
+  get_forward_msg: '📦 读转发消息',
 }
 
 /** 从工具调用参数提取关键信息，给进度消息加上下文（让用户知道在干什么，而非只看到工具名） */
@@ -96,6 +117,10 @@ function extractArgHint(args, name) {
     read_pdf: 'path', read_excel: 'path', transcribe_media: 'path',
     send_file: 'path', get_chat_history: 'count', get_group_file: 'name',
     group_member: 'userId', group_info: 'groupId',
+    send_group_notice: 'content', upload_group_file: 'name',
+    delete_group_file: 'fileId', get_group_file_url: 'fileId',
+    create_group_folder: 'name', rename_group_file: 'newName',
+    transfer_group_file: 'targetGroupId', delete_group_notice: 'noticeId',
   }
   const field = fields[name]
   if (field && a[field] != null) {
@@ -294,6 +319,10 @@ async function buildRuntime() {
       .register(...groupInfoTools)
       .register(...groupManageTools)
       .register(...groupHistoryTools) // get_chat_history：模型按需拉群聊近期记录（被动找回）
+      .register(...groupNoticeTools) // 群公告：发送/获取/删除
+      .register(...groupFileTools) // 群文件 CRUD：上传/删除/文件夹/列目录/直链/移动/重命名/跨群
+      .register(...aiVoiceTools) // AI 语音：角色列表/文字转语音/群内发送
+      .register(...forwardTools) // 合并转发：发送/获取
       .register(...miyousheTools)
   }
 

@@ -108,6 +108,31 @@ export function getMember(ctx, groupId, userId) {
   return null
 }
 
+/**
+ * 调用 NapCat / OneBot 原生动作（e.bot.sendApi(action, params)）。
+ * 供群公告 / 群文件 CRUD / AI 语音 / 合并转发等无框架封装的协议动作使用。
+ * @returns {Promise<{ok:true,data}|{ok:false,error}>}
+ */
+export async function sendApi(ctx, action, params = {}) {
+  const bot = ctx?.bot || ctx?.e?.bot || (typeof Bot !== 'undefined' ? Bot : null)
+  if (!bot || typeof bot.sendApi !== 'function') {
+    return { ok: false, error: '协议端不支持原生 API 调用（需 sendApi，NapCat/OneBot 适配器才有）' }
+  }
+  try {
+    const res = await bot.sendApi(action, params)
+    if (res && (res.status === 'ok' || res.retcode === 0)) return { ok: true, data: res.data }
+    return { ok: false, error: res?.message || res?.wording || `动作 ${action} 失败（retcode=${res?.retcode}）`, retcode: res?.retcode }
+  } catch (e) {
+    return { ok: false, error: `动作 ${action} 异常：${e?.message || e}` }
+  }
+}
+
+/** 取当前/指定群号字符串；非群聊且未指定 → null */
+export function groupIdOf(ctx, groupId) {
+  const gid = groupId || ctx?.e?.group_id || ctx?.groupId
+  return gid ? String(gid) : null
+}
+
 // ─── 参数构造辅助（JSONSchema 样板）───
 export const param = {
   str: (desc, opts = {}) => ({ type: 'string', description: desc, ...(opts.enum ? { enum: opts.enum } : {}) }),
