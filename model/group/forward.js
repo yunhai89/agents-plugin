@@ -18,7 +18,7 @@ export const sendForwardMsgTool = defineTool({
   name: 'send_forward_msg',
   description: '发送合并转发消息（多条消息打包成一条转发卡片）。messages 为节点数组，每项 {uin,name,content} 或 {id}。群聊发群、私聊发好友（按 groupId/userId 自适应）。',
   category: 'message',
-  meta: { interactive: true },
+  meta: { summary: '发送合并转发', interactive: true },
   parameters: param.object({
     messages: {
       type: 'array',
@@ -49,7 +49,7 @@ export const getForwardMsgTool = defineTool({
   name: 'get_forward_msg',
   description: '按 resid/message_id 获取合并转发消息的完整内容（各节点文本/媒体）。用户发来或转发了合并转发卡片时用它解析内容。',
   category: 'query',
-  meta: { resultCap: 10000 },
+  meta: { summary: '读取合并转发', resultCap: 10000 },
   parameters: param.object({
     messageId: param.str('合并转发的 resid / message_id'),
   }, ['messageId']),

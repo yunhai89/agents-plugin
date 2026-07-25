@@ -5,6 +5,10 @@
  * 与 media/tool.js 的 list_group_files/get_group_file（基于 g.fs 封装）互补：
  * 本组走 e.bot.sendApi 原生动作，能力更全（移动/重命名/跨群/直链等）。
  *
+ * 【按名解析】所有需要 id 的工具同时接受 name：模型说"把 a.xlsx 移到 报告 文件夹"
+ * 即可，工具内部自动 list 根目录把 name→id 解析掉，无需模型先精确查 id
+ * （从根上消除"拿不到 id 就放弃/编借口"的失败模式）。
+ *
  * RBAC：读类 query；建文件夹/移动/重命名/上传/转发 group_manage（群管）；
  *      删文件/删文件夹 system（master，destructive）。删除/上传标 interactive 确保顺序确认。
  */
@@ -32,50 +36,96 @@ function normFs(data) {
   return { files, folders }
 }
 
+/** 拉根目录文件系统（name→id 自动解析用；单次工具调用内通常拉一次） */
+async function fetchRoot(ctx, gid) {
+  const r = await sendApi(ctx, 'get_group_root_files', { group_id: gid })
+  if (!r.ok) return { files: [], folders: [], _error: r.error }
+  return normFs(r.data || {})
+}
+
+/** 按 id 或 name(精确→包含模糊)定位文件 → {fileId, busid, name}；找不到返回 null。
+ *  仅给 fileId（不在根目录）时直传 id + 调用方给的 busid。 */
+function findFile(fs, { fileId, fileName, busid }) {
+  let f = null
+  if (fileId) f = fs.files.find((x) => String(x.fileId) === String(fileId))
+  if (!f && fileName) {
+    const n = String(fileName)
+    f = fs.files.find((x) => x.name === n) || fs.files.find((x) => x.name && x.name.includes(n))
+  }
+  if (!f && fileId) return { fileId: String(fileId), busid: busid != null ? Number(busid) : null, name: null }
+  return f || null
+}
+
+/** 按 id 或 name 定位文件夹 → {folderId, name}；找不到返回 null */
+function findFolder(fs, { folderId, folderName }) {
+  if (folderId != null && folderId !== '') return fs.folders.find((x) => String(x.folderId) === String(folderId)) || { folderId: String(folderId), name: null }
+  if (folderName) {
+    const n = String(folderName)
+    return fs.folders.find((x) => x.name === n) || fs.folders.find((x) => x.name && x.name.includes(n)) || null
+  }
+  return null
+}
+
 /** upload_group_file：上传文件到群文件（可指定目标文件夹） */
 export const uploadGroupFileTool = defineTool({
   name: 'upload_group_file',
-  description: '上传文件到群文件系统。file 支持本地路径/URL/base64。可选 folder 指定目标文件夹 id。会审批。',
+  description: '上传文件到群文件系统。file 支持本地路径/URL/base64。可选 folder（文件夹 id）或 folderName（按名解析）指定目标文件夹。',
   category: 'group_manage',
-  meta: { interactive: true },
+  meta: { summary: '上传群文件', interactive: true },
   parameters: param.object({
     file: param.str('文件路径、URL 或 base64:// 编码'),
     name: param.str('上传后的文件名（含扩展名）'),
     folder: param.str('目标文件夹 id（可选，默认根目录）'),
+    folderName: param.str('目标文件夹名（可选，自动解析为 id）'),
     groupId: param.str('群号（可选，默认当前群）'),
   }, ['file', 'name']),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
+    let folder = p.folder || null
+    if (!folder && p.folderName) {
+      const fs = await fetchRoot(ctx, gid)
+      if (fs._error) return { error: '解析目标文件夹失败：' + fs._error }
+      const f = findFolder(fs, { folderName: p.folderName })
+      if (!f?.folderId) return { error: `未找到目标文件夹：${p.folderName}`, availableFolders: fs.folders.map((x) => x.name) }
+      folder = String(f.folderId)
+    }
     const r = await sendApi(ctx, 'upload_group_file', {
       group_id: gid, file: String(p.file), name: String(p.name),
-      ...(p.folder ? { folder: String(p.folder) } : {}),
+      ...(folder ? { folder: String(folder) } : {}),
     })
     if (!r.ok) return { error: r.error }
     return { ok: true, groupId: gid, uploaded: p.name }
   },
 })
 
-/** delete_group_file：删除群文件 */
+/** delete_group_file：删除群文件（按 id 或 name） */
 export const deleteGroupFileTool = defineTool({
   name: 'delete_group_file',
-  description: '删除群文件系统中的文件（需 master，destructive，会审批）。需 file_id 与 busid（从列目录工具获取）。',
+  description: '删除群文件。可传 fileId+busid，或传 fileName 自动解析（busid 一并取到）。需 master，destructive，会审批。',
   category: 'system',
-  meta: { interactive: true },
+  meta: { summary: '删除群文件', interactive: true },
   parameters: param.object({
-    fileId: param.str('文件 id'),
-    busid: param.int('文件 busid（从列目录获取）'),
+    fileId: param.str('文件 id（与 fileName 二选一）'),
+    fileName: param.str('文件名（自动解析为 id+busid，与 fileId 二选一）'),
+    busid: param.int('文件 busid（fileName 解析时自动取；手填 fileId 时可能需要）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['fileId']),
+  }),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
+    if (!p.fileId && !p.fileName) return { error: '需提供 fileId 或 fileName' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件失败：' + fs._error }
+    const file = findFile(fs, p)
+    if (!file?.fileId) return { error: `未找到文件：${p.fileName || p.fileId}`, available: fs.files.map((x) => `${x.name}(${x.fileId})`) }
+    const busid = file.busid != null ? file.busid : (p.busid != null ? Number(p.busid) : null)
     const r = await sendApi(ctx, 'delete_group_file', {
-      group_id: gid, file_id: String(p.fileId),
-      ...(p.busid != null ? { busid: Number(p.busid) } : {}),
+      group_id: gid, file_id: String(file.fileId),
+      ...(busid != null ? { busid } : {}),
     })
     if (!r.ok) return { error: r.error }
-    return { ok: true, groupId: gid, fileId: p.fileId, deleted: true }
+    return { ok: true, groupId: gid, file: file.name || file.fileId, deleted: true }
   },
 })
 
@@ -84,6 +134,7 @@ export const createGroupFolderTool = defineTool({
   name: 'create_group_folder',
   description: '在群文件根目录创建新文件夹。',
   category: 'group_manage',
+  meta: { summary: '建群文件文件夹' },
   parameters: param.object({
     name: param.str('文件夹名称'),
     groupId: param.str('群号（可选，默认当前群）'),
@@ -97,31 +148,37 @@ export const createGroupFolderTool = defineTool({
   },
 })
 
-/** delete_group_folder：删除群文件文件夹 */
+/** delete_group_folder：删除群文件文件夹（按 id 或 name） */
 export const deleteGroupFolderTool = defineTool({
   name: 'delete_group_folder',
-  description: '删除群文件中的文件夹（需 master，destructive，会审批）。',
+  description: '删除群文件中的文件夹。可传 folderId 或 folderName（自动解析）。需 master，destructive，会审批。',
   category: 'system',
-  meta: { interactive: true },
+  meta: { summary: '删群文件文件夹', interactive: true },
   parameters: param.object({
-    folderId: param.str('文件夹 id'),
+    folderId: param.str('文件夹 id（与 folderName 二选一）'),
+    folderName: param.str('文件夹名（自动解析为 id，与 folderId 二选一）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['folderId']),
+  }),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
-    const r = await sendApi(ctx, 'delete_group_folder', { group_id: gid, folder_id: String(p.folderId) })
+    if (!p.folderId && !p.folderName) return { error: '需提供 folderId 或 folderName' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件夹失败：' + fs._error }
+    const folder = findFolder(fs, p)
+    if (!folder?.folderId) return { error: `未找到文件夹：${p.folderName || p.folderId}`, availableFolders: fs.folders.map((x) => x.name) }
+    const r = await sendApi(ctx, 'delete_group_folder', { group_id: gid, folder_id: String(folder.folderId) })
     if (!r.ok) return { error: r.error }
-    return { ok: true, groupId: gid, folderId: p.folderId, deleted: true }
+    return { ok: true, groupId: gid, folder: folder.name || folder.folderId, deleted: true }
   },
 })
 
-/** list_group_folder：列群文件目录（不传 folderId=根目录） */
+/** list_group_folder：列群文件目录（群文件操作的入口，先调它取 id） */
 export const listGroupFolderTool = defineTool({
   name: 'list_group_folder',
-  description: '列出群文件目录内容（文件+文件夹）。不传 folderId 列根目录。先列根目录拿 folder_id 再列子目录。',
+  description: '【群文件操作入口】列出群文件目录内容（文件+文件夹，含 fileId/folderId/busid）。不传 folderId 列根目录。移动/删除/重命名/取直链前若没有 id，先调本工具。',
   category: 'query',
-  meta: { resultCap: 8000 },
+  meta: { summary: '列群文件目录', resultCap: 8000 },
   parameters: param.object({
     folderId: param.str('文件夹 id（可选，默认根目录）'),
     groupId: param.str('群号（可选，默认当前群）'),
@@ -137,89 +194,127 @@ export const listGroupFolderTool = defineTool({
   },
 })
 
-/** get_group_file_url：取群文件下载直链 */
+/** get_group_file_url：取群文件下载直链（按 id 或 name） */
 export const getGroupFileUrlTool = defineTool({
   name: 'get_group_file_url',
-  description: '获取群文件的下载直链（fileId+busid 从列目录工具获取）。直链供下载或交其它工具识别。',
+  description: '获取群文件的下载直链。可传 fileId+busid，或传 fileName 自动解析。',
   category: 'query',
+  meta: { summary: '取群文件直链' },
   parameters: param.object({
-    fileId: param.str('文件 id'),
-    busid: param.int('文件 busid'),
+    fileId: param.str('文件 id（与 fileName 二选一）'),
+    fileName: param.str('文件名（自动解析为 id+busid，与 fileId 二选一）'),
+    busid: param.int('文件 busid（fileName 解析时自动取）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['fileId']),
+  }),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
+    if (!p.fileId && !p.fileName) return { error: '需提供 fileId 或 fileName' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件失败：' + fs._error }
+    const file = findFile(fs, p)
+    if (!file?.fileId) return { error: `未找到文件：${p.fileName || p.fileId}`, available: fs.files.map((x) => x.name) }
+    const busid = file.busid != null ? file.busid : (p.busid != null ? Number(p.busid) : null)
     const r = await sendApi(ctx, 'get_group_file_url', {
-      group_id: gid, file_id: String(p.fileId),
-      ...(p.busid != null ? { busid: Number(p.busid) } : {}),
+      group_id: gid, file_id: String(file.fileId),
+      ...(busid != null ? { busid } : {}),
     })
     if (!r.ok) return { error: r.error }
-    return { ok: true, groupId: gid, fileId: p.fileId, url: r.data?.url || r.data || null }
+    return { ok: true, groupId: gid, file: file.name || file.fileId, url: r.data?.url || r.data || null }
   },
 })
 
-/** move_group_file：移动群文件到指定文件夹 */
+/** move_group_file：移动群文件（按 id 或 name） */
 export const moveGroupFileTool = defineTool({
   name: 'move_group_file',
-  description: '把群文件移动到另一个文件夹（targetDir=目标文件夹 id）。',
+  description: '把群文件移动到另一个文件夹。可传 fileId+targetDir（精确），或传 fileName+targetFolderName（自动按名解析为 id）。移到根目录则目标留空。例：把"a.xlsx"移到"报告"文件夹。',
   category: 'group_manage',
+  meta: { summary: '移动群文件' },
   parameters: param.object({
-    fileId: param.str('文件 id'),
-    targetDir: param.str('目标文件夹 id（根目录传空串或对应根 id）'),
+    fileId: param.str('文件 id（与 fileName 二选一）'),
+    fileName: param.str('文件名（自动解析为 id，与 fileId 二选一）'),
+    targetDir: param.str('目标文件夹 id（与 targetFolderName 二选一；根目录留空）'),
+    targetFolderName: param.str('目标文件夹名（自动解析；移到根目录留空）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['fileId', 'targetDir']),
+  }),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
-    const r = await sendApi(ctx, 'move_group_file', { group_id: gid, file_id: String(p.fileId), target_dir: String(p.targetDir) })
+    if (!p.fileId && !p.fileName) return { error: '需提供 fileId 或 fileName（要移动哪个文件）' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件失败：' + fs._error }
+    const file = findFile(fs, p)
+    if (!file?.fileId) return { error: `未找到文件：${p.fileName || p.fileId}`, available: fs.files.map((x) => x.name) }
+    // 目标目录：显式 targetDir > targetFolderName 解析 > 根目录('')
+    let targetDir = ''
+    if (p.targetDir) targetDir = String(p.targetDir)
+    else if (p.targetFolderName) {
+      const folder = findFolder(fs, { folderName: p.targetFolderName })
+      if (!folder?.folderId) return { error: `未找到目标文件夹：${p.targetFolderName}`, availableFolders: fs.folders.map((x) => x.name) }
+      targetDir = String(folder.folderId)
+    }
+    const r = await sendApi(ctx, 'move_group_file', { group_id: gid, file_id: String(file.fileId), target_dir: targetDir })
     if (!r.ok) return { error: r.error }
-    return { ok: true, groupId: gid, fileId: p.fileId, movedTo: p.targetDir }
+    return { ok: true, groupId: gid, file: file.name || file.fileId, movedTo: p.targetFolderName || (targetDir || '根目录') }
   },
 })
 
-/** rename_group_file：重命名群文件 */
+/** rename_group_file：重命名群文件（按 id 或 name） */
 export const renameGroupFileTool = defineTool({
   name: 'rename_group_file',
-  description: '重命名群文件。需 file_id、新名、当前父目录 id（根目录传空串）。',
+  description: '重命名群文件。可传 fileId 或 fileName（自动解析），newName 为新文件名。',
   category: 'group_manage',
+  meta: { summary: '重命名群文件' },
   parameters: param.object({
-    fileId: param.str('文件 id'),
+    fileId: param.str('文件 id（与 fileName 二选一）'),
+    fileName: param.str('文件名（自动解析为 id，与 fileId 二选一）'),
     newName: param.str('新文件名'),
-    currentParentDirectory: param.str('当前所在文件夹 id（根目录传空串，可选）'),
+    currentParentDirectory: param.str('当前所在文件夹 id（根目录留空，可选）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['fileId', 'newName']),
+  }, ['newName']),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
+    if (!p.fileId && !p.fileName) return { error: '需提供 fileId 或 fileName' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件失败：' + fs._error }
+    const file = findFile(fs, p)
+    if (!file?.fileId) return { error: `未找到文件：${p.fileName || p.fileId}`, available: fs.files.map((x) => x.name) }
     const r = await sendApi(ctx, 'rename_group_file', {
-      group_id: gid, file_id: String(p.fileId),
+      group_id: gid, file_id: String(file.fileId),
       new_name: String(p.newName),
       current_parent_directory: String(p.currentParentDirectory || ''),
     })
     if (!r.ok) return { error: r.error }
-    return { ok: true, groupId: gid, fileId: p.fileId, renamedTo: p.newName }
+    return { ok: true, groupId: gid, file: file.name || file.fileId, renamedTo: p.newName }
   },
 })
 
-/** transfer_group_file：把群文件转发到另一个群 */
+/** transfer_group_file：把群文件转发到另一个群（按 id 或 name） */
 export const transferGroupFileTool = defineTool({
   name: 'transfer_group_file',
-  description: '把本群的某文件转发到另一个群（需 file_id 与目标群号）。',
+  description: '把本群文件转发到另一个群。可传 fileId 或 fileName（自动解析），targetGroupId 为目标群号。',
   category: 'group_manage',
+  meta: { summary: '跨群转发群文件' },
   parameters: param.object({
-    fileId: param.str('文件 id'),
+    fileId: param.str('文件 id（与 fileName 二选一）'),
+    fileName: param.str('文件名（自动解析为 id，与 fileId 二选一）'),
     targetGroupId: param.str('目标群号'),
     groupId: param.str('源群号（可选，默认当前群）'),
-  }, ['fileId', 'targetGroupId']),
+  }, ['targetGroupId']),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
+    if (!p.fileId && !p.fileName) return { error: '需提供 fileId 或 fileName' }
+    const fs = await fetchRoot(ctx, gid)
+    if (fs._error) return { error: '解析文件失败：' + fs._error }
+    const file = findFile(fs, p)
+    if (!file?.fileId) return { error: `未找到文件：${p.fileName || p.fileId}`, available: fs.files.map((x) => x.name) }
     const r = await sendApi(ctx, 'trans_group_file', {
-      group_id: gid, file_id: String(p.fileId), target_group_id: String(p.targetGroupId),
+      group_id: gid, file_id: String(file.fileId), target_group_id: String(p.targetGroupId),
     })
     if (!r.ok) return { error: r.error }
-    return { ok: true, fromGroup: gid, toGroup: p.targetGroupId, fileId: p.fileId, transferred: true }
+    return { ok: true, fromGroup: gid, toGroup: p.targetGroupId, file: file.name || file.fileId, transferred: true }
   },
 })
 
