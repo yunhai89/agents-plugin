@@ -29,6 +29,8 @@ export function formatSearchResults(data) {
     text += `- **${p.title}**${badges ? ` [${badges}]` : ''}${tags}\n`
     text += `  作者: ${p.author.nickname} (Lv.${p.author.level}) | ❤️${p.stats.like} 💬${p.stats.reply} ⭐${p.stats.collect} 👁️${p.stats.view} | ${fmtDateShort(p.createdAt)}\n`
     if (p.summary) text += `  ${p.summary.slice(0, 150)}\n`
+    const cover = p.images?.[0] || p.cover
+    if (cover) text += `  ![](${cover})\n`
     text += `  帖子ID: ${p.postId} | 链接: ${p.link}\n\n`
   }
   text += `查看帖子详情请提供帖子ID。`

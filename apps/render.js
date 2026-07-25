@@ -9,6 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Log from '../utils/Log.js'
 import { buildHtml, mdToHtml } from '../model/render/index.js'
+import { inlineImages } from '../model/render/inline-images.js'
 
 let _shotSeq = 0
 
@@ -56,7 +57,7 @@ export async function screenshot(name, html) {
  */
 export async function renderReplyImage(content, { scale = 2 } = {}) {
   try {
-    const bodyHtml = await mdToHtml(content)
+    const bodyHtml = await inlineImages(await mdToHtml(content)) // 远程图片下载转 base64 内联（防盗链+可靠），见 model/render/inline-images.js
     const html = buildHtml({ bodyHtml })
     // 主路径：独立 puppeteer 高清渲染（dsf 2 + JPEG q95，清晰度远超 Yunzai dsf 1）
     let img = await renderHighQuality(html, { scale })
