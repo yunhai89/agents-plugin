@@ -61,8 +61,8 @@ export async function renderReplyImage(content, { scale = 2 } = {}) {
     // 主路径：独立 puppeteer 高清渲染（dsf 2 + JPEG q95，清晰度远超 Yunzai dsf 1）
     let img = await renderHighQuality(html, { scale })
     if (img) return img
-    // 降级 1：Yunzai 渲染器（dsf 1，但总比文本好）
-    Log.warn('[render] 独立浏览器渲染失败，降级 Yunzai 渲染器…')
+    // 降级 1：Yunzai 渲染器（dsf 1，但总比文本好）。独立 puppeteer 缺包是部署常态，降级属正常兜底，用 debug 不刷屏
+    Log.debug('[render] 独立浏览器渲染失败，降级 Yunzai 渲染器…')
     img = await screenshot('agents-plugin/reply', html)
     if (img) return img
     // 降级 2：Yunzai 重试
@@ -108,8 +108,14 @@ async function getBrowser() {
     try {
       const mod = await import('puppeteer')
       const pptr = mod.default || mod
+      // 优先复用系统 Chromium（容器里 /usr/sbin/chromium 已装），免去 puppeteer 下载二进制；
+      // 未探测到则 executablePath 省略，puppeteer 用默认下载的 Chromium
+      const exec = process.env.PUPPETEER_EXECUTABLE_PATH
+        || ['/usr/sbin/chromium', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome']
+            .find((p) => { try { return fs.existsSync(p) } catch { return false } })
       _browser = await pptr.launch({
         headless: 'new',
+        ...(exec ? { executablePath: exec } : {}),
         args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
       })
       return _browser
