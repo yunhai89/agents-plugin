@@ -64,6 +64,12 @@ agent:
   miyoushe:
     cookie: ""
     defaultGid: 2
+  pixiv:
+    enable: false            # Pixiv 功能总开关（需 refreshToken）
+    refreshToken: ""         # Pixiv refresh token（用 gppt / pxrepo 等获取；填后 #agents重载）
+    imageProxy: "https://i.yuki.sh"   # 图片代理：替换 i.pximg.net（QQ 无 Referer 直连 pximg 显示不了）
+    apiProxy: ""             # 可选：app-api 反代地址（留空=直连 app-api.pixiv.net；国内被墙时填反代）
+    maxImages: 4             # pixiv_illust 单次最多发图数
   persona:
     dir: ""
   skill:

@@ -18,6 +18,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@ibaraki-douji/pixivts": "^3.2.0",
     "@napi-rs/canvas": "^1.0.2",
     "exceljs": "^4.4.0",
     "fluent-ffmpeg": "^2.1.3",

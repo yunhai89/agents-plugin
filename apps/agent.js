@@ -33,6 +33,7 @@ import { createMediaService, makeMediaTools } from '../model/media/index.js'
 import { detectCapabilities } from '../model/llm/capabilities.js'
 import { groupInfoTools, groupManageTools, groupHistoryTools, groupNoticeTools, groupFileTools, aiVoiceTools, forwardTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
+import { pixivTools } from '../model/pixiv/index.js'
 import { loadToolPacks } from '../model/toolkit/index.js'
 import { createSearchManager, makeSearchTools } from '../model/search/index.js'
 import { PersonaStore, PersonaService } from '../model/persona/index.js'
@@ -104,6 +105,12 @@ const PROGRESS_LABELS = {
   // 合并转发
   send_forward_msg: '📦 合并转发',
   get_forward_msg: '📦 读转发消息',
+  // Pixiv
+  pixiv_search: '🎨 搜Pixiv',
+  pixiv_illust: '🎨 取Pixiv作品',
+  pixiv_ranking: '🎨 Pixiv榜单',
+  pixiv_user: '🎨 查Pixiv画师',
+  pixiv_tags: '🎨 查Pixiv标签',
 }
 
 /** 从工具调用参数提取关键信息，给进度消息加上下文（让用户知道在干什么，而非只看到工具名） */
@@ -121,6 +128,8 @@ function extractArgHint(args, name) {
     delete_group_file: 'fileId', get_group_file_url: 'fileId',
     create_group_folder: 'name', rename_group_file: 'newName',
     transfer_group_file: 'targetGroupId', delete_group_notice: 'noticeId',
+    pixiv_search: 'word', pixiv_illust: 'id', pixiv_ranking: 'mode',
+    pixiv_user: 'userId', pixiv_tags: 'word',
   }
   const field = fields[name]
   if (field && a[field] != null) {
@@ -324,6 +333,12 @@ async function buildRuntime() {
       .register(...aiVoiceTools) // AI 语音：角色列表/文字转语音/群内发送
       .register(...forwardTools) // 合并转发：发送/获取
       .register(...miyousheTools)
+  }
+
+  // Pixiv（需 refreshToken；未配置则不注册，避免暴露不可用工具）
+  if (cfg.pixiv?.enable !== false && cfg.pixiv?.refreshToken) {
+    tools.register(...pixivTools) // 搜索/作品(发图)/排行/用户/标签
+    Log.info('[pixiv] 已启用 Pixiv 工具（搜索/作品/排行/用户/标签；图片代理 ' + (cfg.pixiv.imageProxy || 'https://i.yuki.sh') + '）')
   }
 
   // 自定义工具包：扫描插件根 tools/ 目录自动加载（TRSS-Yunzai apps 风格）
