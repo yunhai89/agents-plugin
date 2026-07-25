@@ -2,13 +2,15 @@ node_modules/
 *.log
 .DS_Store
 
-# 文档（根目录 README.md / 开发指南.md 保留入库，其余 .md 忽略；但 skills/ 与 .claude/skills/ 下的技能文件是必需，放行）
+# 文档（根目录 README.md / 开发指南.md 保留入库，其余 .md 忽略；skills/ 下的运行时技能文件是插件必需，放行）
 *.md
 !/README.md
 !/开发指南.md
 !skills/*.md
 !skills/**/*.md
-!.claude/skills/**/*.md
+
+# Claude Code 本地配置/技能（不入项目仓库；开发用技能放全局 ~/.claude/skills/）
+.claude/
 
 # 测试与临时检查脚本
 **/test.mjs
