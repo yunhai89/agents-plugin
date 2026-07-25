@@ -7,7 +7,7 @@
  *   参数+状态+返回 / context 压缩 / 反思 / run_end / reply。
  *
  * 输出：pino 结构化 JSONL，按天轮转（pino-roll），位于
- *   <yunzai>/data/agents-plugin/logs/dev.<count>.log（可用 agent.devLog.dir 改）。
+ *   <插件>/data/logs/dev.<count>.log（可用 agent.devLog.dir 改）。
  *   不截断——工具返回内容按用户要求完整记录（方便排错）。
  *
  * 框架无关：直接 pino 写文件，不走 Bot.makeLog / logger。

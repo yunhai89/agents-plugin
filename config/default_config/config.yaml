@@ -40,8 +40,8 @@ agent:
   guardSensitivity: medium
   redactSecrets: true          # 发送前脱敏：屏蔽回复中的 API Key/token 等敏感信息（默认开）
   devLog:
-    enable: false            # 插件自带详细 trace 日志(框架无关,走 pino 写文件)。true=记录 AI 全链路到 data/agents-plugin/logs/dev.*.log
-    dir: ""                  # 日志目录(留空=默认 <yunzai>/data/agents-plugin/logs)
+    enable: true             # 插件自带详细 trace 日志(框架无关,走 pino 写文件)。true=记录 AI 全链路到 <插件>/data/logs/dev.*.log（默认开）
+    dir: ""                  # 日志目录(留空=默认 <插件>/data/logs)
     level: debug             # pino 级别 trace/debug/info/warn/error(debug 捕获全部步骤)
   policy:
     categoryMin:
