@@ -12,6 +12,8 @@
  *   }
  */
 
+import { toFileSegment } from '../../utils/SendFile.js'
+
 /** 归一化输入 → segment 可接受的 file 字符串 */
 function normalize(source) {
   if (Buffer.isBuffer(source)) return `base64://${source.toString('base64')}`
@@ -57,7 +59,7 @@ export async function sendVideo(ctx, source) {
 export async function sendFile(ctx, source) {
   const seg = getSegment()
   if (!seg) return false
-  try { await ctx?.e?.reply(seg.file(normalize(source))); return true }
+  try { await ctx?.e?.reply(toFileSegment(normalize(source))); return true }
   catch { return false }
 }
 

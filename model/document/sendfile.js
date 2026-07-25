@@ -5,6 +5,8 @@
  * 底层用 segment.file + e.reply（走群文件/好友文件上传 API）。
  */
 
+import { toFileSegment } from '../../utils/SendFile.js'
+
 export const sendFileTool = {
   name: 'send_file',
   description: '发送本地文件到聊天（图片/文档/压缩包/音频/视频等任意文件）。何时用：用户让你发某个已存在但尚未发送的文件时。注意：create_excel 等工具在创建文件时会自动发送，不要用本工具重复发送同一文件。',
@@ -22,10 +24,8 @@ export const sendFileTool = {
     const p = String(params?.path || '').trim()
     if (!p) return { error: '请提供文件路径' }
     const name = params?.name?.trim() || undefined
-    const seg = (typeof segment !== 'undefined' && segment) || null
-    if (!seg) return { error: '当前环境不支持发送文件' }
     try {
-      await ctx?.e?.reply(seg.file(p, name))
+      await ctx?.e?.reply(toFileSegment(p, name))
       return { ok: true, path: p }
     } catch (e) {
       return { error: `发送失败：${e?.message || e}` }

@@ -20,6 +20,7 @@ import Log from '../../utils/Log.js'
 import { renderPdf } from '../../apps/render.js'
 import { buildHtml, mdToHtml } from '../render/index.js'
 import { excelBufferToText } from './excel.js'
+import { toFileSegment } from '../../utils/SendFile.js'
 
 const TEMP_DIR = () => Config.path.temp
 const sofficeBin = () => Config.get().agent?.document?.soffice || 'soffice'
@@ -149,10 +150,9 @@ export const fileToPdfTool = {
     catch (e) { return { error: `转换失败：${e?.message || e}` } }
     if (res.error) return res
     // 发送 PDF（创建即发送，无需再调 send_file）
-    const seg = (typeof segment !== 'undefined' && segment) || null
     let sent = false
-    if (seg && ctx?.e?.reply) {
-      try { await ctx.e.reply(seg.file(res.path, `${safeName(base)}.pdf`)); sent = true } catch (e) { Log.warn('[topdf] 发送 PDF 失败', e?.message || e) }
+    if (ctx?.e?.reply) {
+      try { await ctx.e.reply(toFileSegment(res.path, `${safeName(base)}.pdf`)); sent = true } catch (e) { Log.warn('[topdf] 发送 PDF 失败', e?.message || e) }
     }
     return {
       ok: true, engine: res.engine, path: res.path, sent,

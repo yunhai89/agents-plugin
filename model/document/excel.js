@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Config from '../../utils/Config.js'
+import { toFileSegment } from '../../utils/SendFile.js'
 
 async function getExcelJS() {
   const m = await import('exceljs')
@@ -102,10 +103,9 @@ export const createExcelTool = {
 
     // 创建后自动发送到聊天；返回 sent 标记，明确告知模型已发送、避免它再调 send_file 重复发
     let sent = false
-    const seg = (typeof segment !== 'undefined' && segment) || null
-    if (seg) {
-      try { await ctx?.e?.reply(seg.file(filePath, `${filename}.xlsx`)); sent = true } catch { /* noop */ }
-    }
+    try {
+      await ctx?.e?.reply(toFileSegment(filePath, `${filename}.xlsx`)); sent = true
+    } catch { /* noop */ }
     return {
       ok: true,
       sent,
