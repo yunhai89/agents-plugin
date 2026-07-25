@@ -681,7 +681,12 @@ export class Chat extends plugin {
     const ctx = ctxOf(this.e)
     ctx.conversationId = await rt.session.getActiveConversation(ctx.scopeUserId, ctx.groupId)
     const traceId = randomUUID() // 串联整条链路的 dev trace id（与 Agent taskId 一致）
-    devLog('trigger', { user: ctx.userId, gid: ctx.groupId, isGroup: ctx.isGroup, scopeUserId: ctx.scopeUserId, scopeId: ctx.scopeId, conv: ctx.conversationId, inputLen: (text || '').length }, traceId)
+    devLog('trigger', {
+      user: ctx.userId, gid: ctx.groupId, isGroup: ctx.isGroup, scopeUserId: ctx.scopeUserId, scopeId: ctx.scopeId, conv: ctx.conversationId,
+      text: text || '',              // 用户提问原文（意图来源；trace 不截断，全文记录）
+      inputLen: (text || '').length,
+      hasReply: !!(this.e?.reply_id || (Array.isArray(this.e?.message) && this.e.message.some((s) => s && s.type === 'reply'))), // 是否引用了消息提问
+    }, traceId)
 
     // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
     const protocol = cfg.protocol || 'openai'
@@ -714,7 +719,16 @@ export class Chat extends plugin {
         }
       }
       ctx.media = files // 供 read_attachment 等被动工具读取
-      devLog('media', { files: (files || []).map((f) => ({ kind: f.kind, name: f.name, source: f.source, mime: f.mime, bytes: f.bytes, ok: !f.resolveError, error: f.resolveError || null })) }, traceId)
+      devLog('media', { files: (files || []).map((f) => ({
+        // source: message=消息附带 reply=引用 forward=合并转发 group_file=群文件
+        source: f.source, kind: f.kind, name: f.name, ext: f.ext || null, mime: f.mime || null,
+        size: f.size ?? null,            // 协议/消息段报告大小（与 bytes 对比判断下载是否完整）
+        bytes: f.bytes ?? null,          // 实际下载字节（null/0=未拿到字节=下载未成功）
+        hasUrl: !!f.url,                 // 是否拿到直链
+        status: f.resolveError || 'ok',  // ok / no_url / download_failed / limit_images / limit_size
+        skipReason: f.__skipReason || null,
+        visionDescribed: !!f.__visionDescribed, // 图片是否已被 vision 子模型转成文本描述
+      })) }, traceId)
       // 盲图判定（问题1）：有图片，主模型无视觉，且这些图片没被 vision 子模型转成文本（__visionDescribed）
       if (nImg > 0 && !caps.vision) {
         const rawImageLeft = files.some((f) => (f.kind === 'image' || (f.mime || '').startsWith('image/')) && f.buffer && !f.__visionDescribed)
@@ -776,6 +790,17 @@ export class Chat extends plugin {
     if (wantProgress) await this.e.reply('思考中…')
     const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model, utilityModel: cfg.utilityModel || null, shortCircuitTools: rt.agent.shortCircuitTools, userText: text })
     try {
+      // 喂给模型的首条 user 输入（追"AI 实际看到什么"：附件正文/文件名有没有进上下文、走纯文本还是多模态块、模型能力如何）
+      const __inputText = typeof input === 'string' ? input
+        : Array.isArray(input?.content) ? input.content.filter((b) => b && b.type === 'text').map((b) => b.text || '').join('\n')
+        : ''
+      devLog('input', {
+        caps: { vision: !!caps.vision, file: !!caps.file },
+        inputKind: Array.isArray(input?.content) ? 'multimodal' : 'text',
+        blocks: Array.isArray(input?.content) ? input.content.map((b) => ({ type: b.type, textLen: (b.text || '').length, isMedia: b.type !== 'text' })) : null,
+        inputText: __inputText, // 喂给模型的全部文本（含附件正文/降级说明；trace 不截断）——看附件有没有带文件名
+        attachments: (ctx.media || []).map((f) => ({ name: f.name, source: f.source, kind: f.kind, bytes: f.bytes ?? null, status: f.resolveError || 'ok' })),
+      }, traceId)
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
         taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
@@ -825,7 +850,7 @@ export class Chat extends plugin {
       if (ctx.isGroup && ctx.groupId && rt.kv) {
         rt.kv.set(`perception:last_active:${ctx.groupId}`, { at: Date.now() }).catch(() => {})
       }
-      devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, turns, stopReason }, traceId)
+      devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, body: body || '', turns, stopReason }, traceId)
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
       await this.e.reply(redactSecrets(`失败：${e?.message || e}`))
