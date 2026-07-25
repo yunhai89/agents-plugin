@@ -40,6 +40,8 @@ import { PersonaStore, PersonaService } from '../model/persona/index.js'
 import { VisionService, describeImages } from '../model/vision/index.js'
 import { getStickerManager } from '../model/sticker/manager.js'
 import { redactSecrets } from '../model/agent/redact.js'
+import { randomUUID } from 'node:crypto'
+import devLog from '../utils/DevLog.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
@@ -411,6 +413,7 @@ async function buildRuntime() {
     reflect: cfg.reflect ?? 'auto',
     reflectMaxIterations: cfg.reflectMaxIterations ?? 1,
     stickers: getStickerManager({ logger: Log.tag('sticker') }), // 表情包清单注入（_assembleSystem 用 catalog()）
+    devLog: (event, data, traceId) => devLog(event, data, traceId), // 详细 trace（框架无关，pino 文件）；库零依赖，由 apps 注入
     logger: Log.tag('agent'),
   })
 
@@ -639,6 +642,8 @@ export class Chat extends plugin {
     const cfg = Config.get().agent || {}
     const ctx = ctxOf(this.e)
     ctx.conversationId = await rt.session.getActiveConversation(ctx.scopeUserId, ctx.groupId)
+    const traceId = randomUUID() // 串联整条链路的 dev trace id（与 Agent taskId 一致）
+    devLog('trigger', { user: ctx.userId, gid: ctx.groupId, isGroup: ctx.isGroup, scopeUserId: ctx.scopeUserId, scopeId: ctx.scopeId, conv: ctx.conversationId, inputLen: (text || '').length }, traceId)
 
     // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
     const protocol = cfg.protocol || 'openai'
@@ -671,6 +676,7 @@ export class Chat extends plugin {
         }
       }
       ctx.media = files // 供 read_attachment 等被动工具读取
+      devLog('media', { files: (files || []).map((f) => ({ kind: f.kind, name: f.name, source: f.source, mime: f.mime, bytes: f.bytes, ok: !f.resolveError, error: f.resolveError || null })) }, traceId)
       // 盲图判定（问题1）：有图片，主模型无视觉，且这些图片没被 vision 子模型转成文本（__visionDescribed）
       if (nImg > 0 && !caps.vision) {
         const rawImageLeft = files.some((f) => (f.kind === 'image' || (f.mime || '').startsWith('image/')) && f.buffer && !f.__visionDescribed)
@@ -734,6 +740,7 @@ export class Chat extends plugin {
     try {
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
+        taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
         ...(rs.onToolEnd ? { onToolEnd: rs.onToolEnd } : {}),
@@ -780,6 +787,7 @@ export class Chat extends plugin {
       if (ctx.isGroup && ctx.groupId && rt.kv) {
         rt.kv.set(`perception:last_active:${ctx.groupId}`, { at: Date.now() }).catch(() => {})
       }
+      devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, turns, stopReason }, traceId)
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
       await this.e.reply(redactSecrets(`失败：${e?.message || e}`))

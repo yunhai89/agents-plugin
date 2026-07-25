@@ -47,8 +47,9 @@ function isToolError(content) {
   return typeof content === 'string' && /"error"\s*:/.test(content)
 }
 
-/** 失败回灌提示：附在错误 tool 结果后，引导模型据实回复、勿臆测编造 */
-const TOOL_FAIL_HINT = '\n[系统提示] 以上是工具返回的真实失败原因。请据此如实回复用户（可转译/精简），切勿臆测或编造其它原因；若错误指出了可重试方向（如缺参数、权限不足、网络不可达、需先查 id），可换方式重试或指导用户操作。'
+/** 失败回灌提示：注入错误 tool 结果的 _hint 字段，引导模型据实回复、勿臆测编造。
+ *  注：以 JSON 字段注入（而非追加文本），保证 tool 结果仍可被 JSON.parse。 */
+const TOOL_FAIL_HINT = '这是工具返回的真实失败原因——请据此如实回复用户（勿臆测/编造其它原因）；若给出可重试方向（缺参数/权限不足/网络不可达/需先查 id）则换方式重试或指导用户。'
 
 export class Agent {
   constructor(config = {}) {
@@ -74,6 +75,7 @@ export class Agent {
     this.keepReasoning = config.keepReasoning === true // 默认 false：不把 reasoning 回灌历史，省 context
     this.contextKeepRecent = config.contextKeepRecent ?? 8 // 压缩时至少保留的尾部消息数
     this.logger = config.logger || (() => {})
+    this.devLog = config.devLog || null // 详细 trace 日志（apps 注入，库零依赖）；null 时为 no-op
 
     // opt-in 运营层
     this.guard = config.guard || null
@@ -172,6 +174,7 @@ export class Agent {
     const toolList = this.tools?.list?.() || []
     const __runStart = Date.now()
     this.logger('mark', 'run start user=', ctx?.userId, 'gid=', ctx?.groupId, 'conv=', ctx?.conversationId, 'inputLen=', rawText.length, 'msgs=', this.messages.length, 'tools=', toolList.length, 'maxTurns=', this.maxTurns)
+    this.devLog?.('run_start', { user: ctx?.userId, gid: ctx?.groupId, conv: ctx?.conversationId, scopeUserId, scopeId, model: this.model, msgs: this.messages.length, tools: toolList.length, maxTurns: this.maxTurns, inputLen: rawText.length }, taskId)
 
     while (turns < this.maxTurns) {
       if (signal?.aborted) throw new Error('aborted')
@@ -208,6 +211,12 @@ export class Agent {
       if (result.usage) usage = mergeUsage(usage, result.usage)
       turns++
       this.logger('debug', `turn ${turns}`, 'model=', this.model, 'finish=', result.finishReason, 'contentLen=', (result.content || '').length, 'toolCalls=', result.toolCalls?.length || 0, 'reasoning=', !!result.reasoning, 'usage=', fmtUsage(result.usage), `ms=${__ms}`)
+      this.devLog?.('turn', {
+        turn: turns, finish: result.finishReason, contentLen: (result.content || '').length,
+        content: result.content || '', reasoning: !!result.reasoning,
+        toolCalls: (result.toolCalls || []).map((tc) => ({ name: tc.name, arguments: tc.arguments })),
+        usage: result.usage || null, ms: __ms,
+      }, taskId)
 
       const assistantMsg = {
         role: 'assistant',
@@ -233,6 +242,7 @@ export class Agent {
           })
           reflectIter++
           if (verdict?.usage) usage = mergeUsage(usage, verdict.usage)
+          this.devLog?.('reflect', { revise: !!verdict?.revise, feedback: verdict?.feedback || null, iter: reflectIter }, taskId)
           if (verdict?.revise) {
             this.logger('mark', `[reflect] 自检发现需修正：${verdict.feedback || ''}——回环重做`)
             this.messages.push({ role: 'user', content: `【自检反馈】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` })
@@ -280,6 +290,7 @@ export class Agent {
     }
 
     this.logger('mark', 'run end turns=', turns, 'stop=', stopReason, 'usage=', fmtUsage(usage), 'replyLen=', (lastContent || '').length, `totalMs=${Date.now() - __runStart}`)
+    this.devLog?.('run_end', { turns, stopReason, usage, replyLen: (lastContent || '').length, totalMs: Date.now() - __runStart, usedTools }, taskId)
     return { content: lastContent, messages: this.messages, usage, turns, taskId, stopReason }
   }
 
@@ -413,6 +424,7 @@ export class Agent {
   }
 
   async _executeOne(tc, execCtx, cb, ctx) {
+    const __t = Date.now()
     cb.onToolStart?.(tc)
     const tool = this.tools?.get?.(tc.name)
     // 注：工具调用入参/耗时/结果/错误的日志由 ToolRegistry 的 AOP 切面统一打印，
@@ -485,9 +497,13 @@ export class Agent {
         }
       }
     }
-    // 失败回灌：工具返回/抛出错误时，在回灌给模型的 tool 结果里附明确指令——
+    // 失败回灌：工具返回/抛出错误时，把"据实回复"提示注入 tool 结果（JSON 字段，保持可 parse）——
     // 让模型据实转告用户真实错误，而非忽略错误去臆测/编造失败原因（杜绝"schema bug"式瞎编）
-    if (isToolError(content)) content = content + TOOL_FAIL_HINT
+    if (isToolError(content)) {
+      try { const o = JSON.parse(content); o._hint = TOOL_FAIL_HINT; content = JSON.stringify(o) }
+      catch { content = content + '\n' + TOOL_FAIL_HINT } // 非 JSON 结果才回退追加
+    }
+    this.devLog?.('tool', { name: tc.name, args: tc.arguments, ok: !isToolError(content), result: content, ms: Date.now() - __t }, execCtx.taskId)
     cb.onToolEnd?.(tc, content)
     return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
   }
