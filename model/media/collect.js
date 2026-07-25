@@ -36,25 +36,30 @@ export function kindOf(type) {
   }
 }
 
-/** 从单个消息对象的 .message 段数组抽取媒体描述符 */
+/** 从单个消息对象的 .message/.content 段数组抽取媒体描述符 */
 export function extractFromMessage(msg, source) {
   const out = []
-  const segs = msg?.message
-  if (!Array.isArray(segs)) return out
-  for (const seg of segs) {
+  const segs = msg?.message || msg?.content || msg?.messages
+  const arr = Array.isArray(segs) ? segs : (segs ? [segs] : [])
+  for (const seg of arr) {
+    if (!seg || typeof seg !== 'object') continue
+    // 兼容两种段形态：TRSS 扁平段 {type, ...data} 与原始 OneBot 段 {type, data:{...}}
+    // （引用/历史消息走 sendApi('get_msg') 兜底时返回原始段，file_id 在 data 里——
+    //  不合并就读不到，导致引用的 .txt 等文件段 fid 丢失、无法 get_file 取字节）
+    const d = (seg.data && typeof seg.data === 'object' && !Array.isArray(seg.data)) ? { ...seg, ...seg.data } : seg
     const kind = kindOf(seg.type)
     if (!kind) continue
     out.push({
       id: nextId(),
       source,
       kind,
-      name: seg.name || seg.file || (seg.url ? String(seg.url).split('/').pop()?.split('?')[0] : null) || `${kind}_${out.length}`,
-      url: seg.url || null,
+      name: d.name || d.file || d.fileName || (d.url ? String(d.url).split('/').pop()?.split('?')[0] : null) || `${kind}_${out.length}`,
+      url: d.url || null,
       // NapCat 文件段用 file_id（非 fid/id）；图片/语音段用 file（哈希文件名，供 get_image/get_record）
-      fid: seg.fid || seg.file_id || seg.id || null,
-      busid: seg.busid ?? null,
-      size: seg.size ? Number(seg.size) : (seg.file_size ? Number(seg.file_size) : null),
-      segment: seg,
+      fid: d.fid || d.file_id || d.id || null,
+      busid: d.busid ?? null,
+      size: d.size ? Number(d.size) : (d.file_size ? Number(d.file_size) : null),
+      segment: d,
     })
   }
   return out
