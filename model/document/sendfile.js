@@ -7,7 +7,7 @@
 
 export const sendFileTool = {
   name: 'send_file',
-  description: '发送本地文件到聊天（图片/文档/压缩包/音频/视频等任意文件）。何时用：用户让你发某个文件、或你生成了文件需要发送给用户时。',
+  description: '发送本地文件到聊天（图片/文档/压缩包/音频/视频等任意文件）。何时用：用户让你发某个已存在但尚未发送的文件时。注意：create_excel 等工具在创建文件时会自动发送，不要用本工具重复发送同一文件。',
   category: 'query',
   meta: { summary: '发送文件到聊天' },
   parameters: {

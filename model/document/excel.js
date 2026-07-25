@@ -21,7 +21,7 @@ function thinBorder() {
 /** create_excel：创建 xlsx（多工作表、表头样式、合并、列宽自适应）→ 发送文件 */
 export const createExcelTool = {
   name: 'create_excel',
-  description: '创建 Excel(.xlsx) 文件并发送。支持多工作表、合并单元格、列宽自适应、表头样式（加粗/蓝底白字/边框）。何时用：用户让你做表格、数据汇总、报表时。',
+  description: '创建 Excel(.xlsx) 文件并【自动发送】到聊天（创建即发送，无需再调 send_file）。支持多工作表、合并单元格、列宽自适应、表头样式（加粗/蓝底白字/边框）。何时用：用户让你做表格、数据汇总、报表时。',
   category: 'query',
   meta: { summary: '创建 Excel 文件' },
   parameters: {
@@ -99,10 +99,19 @@ export const createExcelTool = {
     const filePath = path.join(dir, `${filename}.xlsx`)
     await wb.xlsx.writeFile(filePath)
 
+    // 创建后自动发送到聊天；返回 sent 标记，明确告知模型已发送、避免它再调 send_file 重复发
+    let sent = false
     const seg = (typeof segment !== 'undefined' && segment) || null
-    if (seg) try { await ctx?.e?.reply(seg.file(filePath, `${filename}.xlsx`)) } catch { /* noop */ }
-
-    return { ok: true, path: filePath, sheets: wb.worksheets.length }
+    if (seg) {
+      try { await ctx?.e?.reply(seg.file(filePath, `${filename}.xlsx`)); sent = true } catch { /* noop */ }
+    }
+    return {
+      ok: true,
+      sent,
+      path: filePath,
+      sheets: wb.worksheets.length,
+      note: sent ? '文件已发送到聊天，无需再用 send_file 重复发送' : '文件已生成但未发送成功；如需发送请用 send_file',
+    }
   },
 }
 
