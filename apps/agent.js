@@ -569,7 +569,7 @@ export class Chat extends plugin {
     }
     const cfg = Config.get().agent || {}
     const ctx = ctxOf(this.e)
-    ctx.conversationId = await rt.session.getActiveConversation(ctx.userId)
+    ctx.conversationId = await rt.session.getActiveConversation(ctx.userId, ctx.groupId)
 
     // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
     const protocol = cfg.protocol || 'openai'
@@ -703,8 +703,8 @@ export class Chat extends plugin {
   async chatList() {
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const list = await rt.session.listConversations(ctx.userId)
-    const activeId = await rt.session.getActiveConversation(ctx.userId)
+    const list = await rt.session.listConversations(ctx.userId, ctx.groupId)
+    const activeId = await rt.session.getActiveConversation(ctx.userId, ctx.groupId)
     const html = buildChatListHtml({ user: ctx.userId, conversations: list, activeId })
     const img = await screenshot('agents-plugin/chat-list', html)
     if (img) return this.e.reply(img), true
@@ -717,7 +717,7 @@ export class Chat extends plugin {
     const id = this.e.msg.match(/\d+/)?.[0]
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const ok = await rt.session.setActiveConversation(ctx.userId, id)
+    const ok = await rt.session.setActiveConversation(ctx.userId, ctx.groupId, id)
     await this.e.reply(ok ? `已切换到对话 #${id}` : `未找到对话 #${id}，发送 #聊天列表 查看`)
     return true
   }
@@ -725,7 +725,7 @@ export class Chat extends plugin {
   async newChat() {
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
-    const conv = await rt.session.createConversation(ctx.userId)
+    const conv = await rt.session.createConversation(ctx.userId, ctx.groupId)
     await this.e.reply(`已新建对话 #${conv.id}（${conv.title}），后续消息在此对话中继续`)
     return true
   }

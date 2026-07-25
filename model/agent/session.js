@@ -43,7 +43,7 @@ export class SessionStore {
   async historyLength({ userId, groupId, conversationId } = {}) {
     try {
       if (conversationId != null && typeof this.getConversation === 'function') {
-        return (await this.getConversation(userId, conversationId)).length
+        return (await this.getConversation(userId, groupId, conversationId)).length
       }
       return (await this.get(this.key(groupId, userId))).length
     } catch { return 0 }
@@ -78,27 +78,27 @@ export class SessionStore {
     return out.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
   }
 
-  // —— 用户多对话（conversation）——
-  convKey(userId, convId) {
-    return `${this.prefix}conv:${userId}:${convId}`
+  // —— 用户多对话（conversation，按 群+用户 隔离：同一用户在不同群有各自独立的对话列表）——
+  convKey(userId, groupId, convId) {
+    return `${this.prefix}conv:${groupId || 'private'}:${userId}:${convId}`
   }
-  activeKey(userId) {
-    return `${this.prefix}conv:active:${userId}`
+  activeKey(userId, groupId) {
+    return `${this.prefix}conv:active:${groupId || 'private'}:${userId}`
   }
-  seqKey(userId) {
-    return `${this.prefix}conv:seq:${userId}`
+  seqKey(userId, groupId) {
+    return `${this.prefix}conv:seq:${groupId || 'private'}:${userId}`
   }
 
-  async _nextConvId(userId) {
-    const seq = (await this.kv.get(this.seqKey(userId))) || 0
+  async _nextConvId(userId, groupId) {
+    const seq = (await this.kv.get(this.seqKey(userId, groupId))) || 0
     const id = String(seq + 1)
-    await this.kv.set(this.seqKey(userId), seq + 1)
+    await this.kv.set(this.seqKey(userId, groupId), seq + 1)
     return id
   }
 
   /** 新建对话并设为活跃 */
-  async createConversation(userId, title) {
-    const id = await this._nextConvId(userId)
+  async createConversation(userId, groupId, title) {
+    const id = await this._nextConvId(userId, groupId)
     const conv = {
       id,
       title: title || `对话 ${id}`,
@@ -106,14 +106,15 @@ export class SessionStore {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     }
-    await this.kv.set(this.convKey(userId, id), conv)
-    await this.setActiveConversation(userId, id)
+    await this.kv.set(this.convKey(userId, groupId, id), conv)
+    await this.setActiveConversation(userId, groupId, id)
     return conv
   }
 
-  /** 列出用户全部对话（id/title/条数/更新时间/预览） */
-  async listConversations(userId) {
-    const scanPrefix = `${this.prefix}conv:${userId}:`
+  /** 列出用户在指定群的全部对话（id/title/条数/更新时间/预览） */
+  async listConversations(userId, groupId) {
+    const gid = groupId || 'private'
+    const scanPrefix = `${this.prefix}conv:${gid}:${userId}:`
     const keys = (await this.kv.scan(scanPrefix)).filter((k) => !k.endsWith(':active') && !k.includes(':seq:'))
     const out = []
     for (const k of keys) {
@@ -132,32 +133,32 @@ export class SessionStore {
   }
 
   /** 取活跃对话 id；若无则自动创建首个 */
-  async getActiveConversation(userId) {
-    const v = await this.kv.get(this.activeKey(userId))
+  async getActiveConversation(userId, groupId) {
+    const v = await this.kv.get(this.activeKey(userId, groupId))
     if (v) return v
-    const list = await this.listConversations(userId)
+    const list = await this.listConversations(userId, groupId)
     if (list.length) {
-      await this.setActiveConversation(userId, list[0].id)
+      await this.setActiveConversation(userId, groupId, list[0].id)
       return list[0].id
     }
-    const c = await this.createConversation(userId)
+    const c = await this.createConversation(userId, groupId)
     return c.id
   }
 
-  async setActiveConversation(userId, convId) {
-    const exists = await this.kv.get(this.convKey(userId, String(convId)))
+  async setActiveConversation(userId, groupId, convId) {
+    const exists = await this.kv.get(this.convKey(userId, groupId, String(convId)))
     if (!exists) return false
-    await this.kv.set(this.activeKey(userId), String(convId))
+    await this.kv.set(this.activeKey(userId, groupId), String(convId))
     return true
   }
 
-  async getConversation(userId, convId) {
-    const c = await this.kv.get(this.convKey(userId, String(convId)))
+  async getConversation(userId, groupId, convId) {
+    const c = await this.kv.get(this.convKey(userId, groupId, String(convId)))
     return (c?.messages || []).map((m) => ({ ...m }))
   }
 
-  async appendConversation(userId, convId, msgs) {
-    const k = this.convKey(userId, String(convId))
+  async appendConversation(userId, groupId, convId, msgs) {
+    const k = this.convKey(userId, groupId, String(convId))
     const c = (await this.kv.get(k)) || { id: String(convId), title: `对话 ${convId}`, messages: [], createdAt: Date.now() }
     const next = [...(c.messages || []), ...msgs]
     const trimmed = trimKeepFirst(next, this.window)
@@ -167,13 +168,13 @@ export class SessionStore {
     return trimmed
   }
 
-  async deleteConversation(userId, convId) {
-    await this.kv.del(this.convKey(userId, String(convId)))
-    const active = await this.kv.get(this.activeKey(userId))
+  async deleteConversation(userId, groupId, convId) {
+    await this.kv.del(this.convKey(userId, groupId, String(convId)))
+    const active = await this.kv.get(this.activeKey(userId, groupId))
     if (active === String(convId)) {
-      const list = await this.listConversations(userId)
-      if (list.length) await this.setActiveConversation(userId, list[0].id)
-      else await this.createConversation(userId)
+      const list = await this.listConversations(userId, groupId)
+      if (list.length) await this.setActiveConversation(userId, groupId, list[0].id)
+      else await this.createConversation(userId, groupId)
     }
   }
 }

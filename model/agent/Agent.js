@@ -136,7 +136,7 @@ export class Agent {
     const useConv = !!(this.session && ctx && ctx.conversationId != null && typeof this.session.getConversation === 'function')
     let sessKey = null
     if (useConv) {
-      try { this.messages = await this.session.getConversation(ctx.userId, ctx.conversationId) } catch { this.messages = [] }
+      try { this.messages = await this.session.getConversation(ctx.userId, ctx.groupId, ctx.conversationId) } catch { this.messages = [] }
     } else if (this.session && ctx) {
       sessKey = this.session.key(ctx.groupId, ctx.userId)
       try { this.messages = await this.session.get(sessKey) } catch { this.messages = [] }
@@ -258,7 +258,7 @@ export class Agent {
 
     // 持久化 session + 异步抽取记忆
     if (useConv) {
-      try { await this.session.appendConversation(ctx.userId, ctx.conversationId, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
+      try { await this.session.appendConversation(ctx.userId, ctx.groupId, ctx.conversationId, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
     } else if (sessKey) {
       try { await this.session.append(sessKey, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'session 持久化失败', e) }
     }
