@@ -20,6 +20,16 @@ function brief(v, n = 160) {
   return s.length > n ? s.slice(0, n) + `…(+${s.length - n})` : s
 }
 
+/** 软失败判定：工具以"不抛异常、返回错误对象/串"的方式报错。
+ *  - 对象：含 error 字段 或 ok===false
+ *  - 字符串：形如 {"error":...} 或 error: 前缀（被 stringify 过的结果） */
+function isErrorShape(r) {
+  if (r == null) return false
+  if (typeof r === 'string') return /^\s*\{.*"error"\s*:/i.test(r) || /^error\b/i.test(r)
+  if (typeof r === 'object' && !Array.isArray(r)) return r.error != null || r.ok === false
+  return false
+}
+
 export class ToolRegistry {
   constructor({ logger = () => {} } = {}) {
     this.tools = new Map()
@@ -45,8 +55,11 @@ export class ToolRegistry {
     return this
   }
 
-  /** AOP 包装：调用前后统一打日志、计时；出错打 warn 并抛出（由调用方归一为 {error}）。
-   *  MCP 工具(meta.mcp)用其专用 logger、默认 info 级（调用可见）；其余工具仅 debug。 */
+  /** AOP 包装：调用前后统一打日志、计时。
+   *  - 抛异常 → warn（可见）并抛出（由调用方归一为 {error}）
+   *  - 软失败（返回 {error}/{ok:false}，不抛）→ 提升到 warn，确保控制台可见
+   *    （否则只走 debug，默认 debug:false 会被吞 → 工具失败完全无痕）
+   *  MCP 工具(meta.mcp)用其专用 logger、默认 info 级；其余工具成功路径仅 debug。 */
   #wrap(tool) {
     const self = this
     const orig = tool.execute
@@ -62,8 +75,15 @@ export class ToolRegistry {
         else self.logger('debug', 'tool call', name, 'args=', brief(params))
         try {
           const r = await orig.call(this, params, ctx)
-          if (isMcp) lg('info', `完成 ${name}`, `耗时=${Date.now() - t0}ms`)
-          else self.logger('debug', 'tool done', name, `ms=${Date.now() - t0}`, 'preview=', brief(r, 140))
+          const ms = Date.now() - t0
+          if (isErrorShape(r)) {
+            // 软失败：返回 {error}/{ok:false}（大量工具的报错方式）→ warn 确保可见
+            ;(isMcp ? lg : self.logger)('warn', 'tool failed', name, brief(r.error != null ? r.error : r, 200), 'args=', brief(params))
+          } else if (isMcp) {
+            lg('info', `完成 ${name}`, `耗时=${ms}ms`)
+          } else {
+            self.logger('debug', 'tool done', name, `ms=${ms}`, 'preview=', brief(r, 140))
+          }
           return r
         } catch (e) {
           lg('warn', 'tool error', name, e?.message || e, 'args=', brief(params))
