@@ -775,6 +775,20 @@ export class Chat extends plugin {
       const skillText = rt.skills.assemble(matched)
       if (matched.length) Log.mark('[skill]', '命中说明书：', matched.map((s) => s.name).join(','))
       context = [perception, skillText].filter(Boolean).join('\n\n') || undefined
+      // B方案：附件清单注入 context——让 AI 明确知道本轮有哪些附件、可用
+      // read_attachment/file_to_pdf(name:"<文件名>") 直接处理。根治"附件正文进了上下文
+      // 却丢了文件名、AI 不知该对哪个文件动手"（如"把这个转pdf"→AI 去列群文件找不到）
+      const __atts = Array.isArray(ctx.media) ? ctx.media : []
+      if (__atts.length) {
+        const __srcCn = { message: '消息附带', reply: '引用消息', forward: '合并转发', group_file: '群文件' }
+        const __lines = __atts.map((f, i) => {
+          const sz = f.bytes ? `${(f.bytes / 1024).toFixed(1)}KB` : '大小未知'
+          const st = f.resolveError ? `（获取失败:${f.resolveError}）` : ''
+          return `${i + 1}. ${f.name} (${sz}, ${__srcCn[f.source] || f.source}${f.mime ? ', ' + f.mime : ''})${st}`
+        })
+        const __attHint = `【本次附件】用户本轮有以下附件（已自动收集；你可用 read_attachment(name:"<文件名>") 读内容、file_to_pdf(name:"<文件名>") 转PDF，无需知道路径）：\n${__lines.join('\n')}\n若用户指令针对某附件（如"转成pdf"/"总结这个文件"），请直接用其文件名作 name 参数调用对应工具。`
+        context = context ? `${context}\n\n${__attHint}` : __attHint
+      }
     } catch (e) {
       Log.warn('[perception/skill] 注入失败', e?.message || e)
     }

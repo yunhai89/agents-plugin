@@ -48,6 +48,17 @@ function isPlainObj(v) {
   return v && typeof v === 'object' && !Array.isArray(v)
 }
 
+/** 递归检测 base 有而 over 缺失的键（用于 config.yaml 自愈补全） */
+function hasMissingKeys(base, over) {
+  if (!isPlainObj(base)) return false
+  if (!isPlainObj(over)) return true
+  for (const k of Object.keys(base)) {
+    if (!(k in over)) return true
+    if (isPlainObj(base[k]) && hasMissingKeys(base[k], over[k])) return true
+  }
+  return false
+}
+
 /**
  * 深度合并：over 逐键覆盖 base；同为普通对象时递归合并（数组整体替换）。
  * 这样插件升级新增的默认配置项，即便用户旧配置里没有，也能自动补全。
@@ -103,9 +114,18 @@ function load() {
   // 首次运行（无旧文件也无新文件）：把默认配置落到插件内，方便用户直接编辑
   if (!fs.existsSync(userConfigPath) && Object.keys(def).length) {
     try { writeUser(def) } catch (err) { Log.warn('写入默认配置失败', err) }
+    _data = deepMerge(def, readUser())
+    return
   }
-  // 深度合并：用户配置覆盖默认值，默认值里新增的键自动补全
-  _data = deepMerge(def, readUser())
+  const user = readUser()
+  const merged = deepMerge(def, user)
+  // 自愈：default 有而 user 缺失的键，补全回 user config.yaml（user config 是程序生成的、
+  // 无注释，重写无损）。否则用户编辑 config.yaml 时看不到新增字段（如 agent.pixiv / agent.document），
+  // 只能靠运行时 deepMerge 兜底——既不可见也不可编辑。
+  if (hasMissingKeys(def, user)) {
+    try { writeUser(merged); Log.mark('[config] 已补全 config.yaml 中缺失的字段') } catch (e) { Log.warn('[config] 补全缺失字段失败', e?.message || e) }
+  }
+  _data = merged
 }
 
 /** 重新读取并合并；内容变化（或 force=true）才通知订阅者（去重，避免自发保存引发无谓重建） */
