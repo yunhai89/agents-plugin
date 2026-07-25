@@ -108,6 +108,7 @@ export function supportGuoba() {
         { field: 'agent.baseURL', label: '自定义 baseURL', bottomHelpMessage: '覆盖 preset', component: 'Input' },
         { field: 'agent.apiKey', label: 'API Key', component: 'Input', componentProps: { placeholder: 'sk-xxx' } },
         { field: 'agent.model', label: '模型 ID', component: 'Input', componentProps: { placeholder: 'deepseek-chat' } },
+        { field: 'agent.utilityModel', label: '播报小模型(可选)', bottomHelpMessage: '进度播报等旁路任务用的小模型 id；留空=沿用主模型，填主 provider 支持的小模型可降本', component: 'Input', componentProps: { placeholder: '留空=主模型' } },
         { field: 'agent.maxTurns', label: '工具调用轮次上限', component: 'InputNumber', componentProps: { min: 1, max: 100 } },
         { field: 'agent.temperature', label: '采样温度', bottomHelpMessage: '留空=厂商默认', component: 'InputNumber', componentProps: { min: 0, max: 2, step: 0.1 } },
         { field: 'agent.maxTokens', label: '单次回复最大 token', bottomHelpMessage: '留空=厂商默认（Anthropic 默认 4096）', component: 'InputNumber', componentProps: { min: 1 } },

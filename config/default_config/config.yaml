@@ -9,6 +9,7 @@ agent:
   baseURL: ""
   apiKey: ""
   model: "deepseek-chat"
+  utilityModel: ""  # 进度播报等旁路任务用的小模型 id（留空=沿用主模型；填主 provider 支持的小模型 id 可降本）
   reasoningFields: []
   maxTurns: 50
   temperature: 0.2  # 工具调用稳定性（建议 0.1~0.3；勿设 0 避免复读式回复）

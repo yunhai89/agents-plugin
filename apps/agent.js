@@ -81,6 +81,8 @@ const PROGRESS_LABELS = {
   group_set_admin: '⚙️ 群操作',
   group_set_name: '⚙️ 群操作',
   miyoushe_search: '🎮 查米游社',
+  memory: '📝 更新记忆',
+  memory_search: '🧠 检索记忆',
 }
 
 /** 从工具调用参数提取关键信息，给进度消息加上下文（让用户知道在干什么，而非只看到工具名） */
@@ -103,18 +105,34 @@ function extractArgHint(args, name) {
     if (field === 'path') v = v.split('/').pop()
     return v.slice(0, 40)
   }
-  for (const v of Object.values(a)) {
-    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 40)
-  }
+  // 未登记工具不再 fallback 取首个字符串值（否则会把 memory 的 target='memory' 这类
+  // 内部枚举字段当 hint 贴出，产出"🔧 调用 memory：memory"之类的无意义进度）。只发 label。
   return null
+}
+
+/**
+ * 构造 utility-model 进度播报的 prompt（参考 OpenClaw progress-narrator-model.ts，中文化）。
+ * 输入：用户请求摘要 + 近期工具事件 + 上一条播报（避免重复）→ 一句贴合上下文的自然语言状态。
+ */
+function buildNarrationPrompt(reqBrief, events, previousText) {
+  return [
+    '你是 AI 助手的进度播报员。根据用户的请求和助手当前的工具调用情况，用一句简短、口语化的中文描述助手现在正在做什么、或遇到了什么状况（例如某一步失败了、正在换个方法重试）。',
+    '要求：不超过 30 字；像跟朋友说话一样自然；不要 emoji、不要引号、不要列表、不要工具名/API 等技术术语；只输出这一句话，不加任何解释。',
+    reqBrief ? `\n用户请求：${reqBrief}` : '\n用户请求：(未知)',
+    `\n近期工具调用（由旧到新）：\n${events || '(无)'}`,
+    previousText ? `\n上一条播报（不要与它重复）：${previousText}` : '',
+  ].join('')
 }
 
 /**
  * 构造进度反馈回调集合。
  * @param {object} e Yunzai 事件
- * @param {object} opts { progress:bool }
+ * @param {object} opts { progress, recall, provider, model, utilityModel, shortCircuitTools, userText }
  */
-function makeReplyStream(e, { progress = true, recall = 3, provider = null, model = null } = {}) {
+function makeReplyStream(e, {
+  progress = true, recall = 3, provider = null, model = null,
+  utilityModel = null, shortCircuitTools = ['clarify'], userText = '',
+} = {}) {
   if (!progress) return {}
   let lastAt = 0
   let lastTool = null
@@ -125,26 +143,34 @@ function makeReplyStream(e, { progress = true, recall = 3, provider = null, mode
   const toolEvents = []
   let lastNarrationAt = 0
   let narrationCount = 0
+  let lastNarration = '' // 上一条播报，喂回 prompt 避免重复
+  const reqBrief = String(userText || '').slice(0, 500) // 用户请求摘要，给 narration 当上下文
+  const narrModel = utilityModel || model // 留空则沿用主模型（向后兼容）
 
-  // fire-and-forget narrator：每 3 个工具事件或 15s 触发一次，单任务最多 3 次
-  async function tryNarrate() {
-    if (!provider || !model) return
+  // fire-and-forget narrator：immediate=true（失败事件）时跳过节流立即生成；否则按 ≥3 事件/15s 节流，单任务最多 3 次
+  async function tryNarrate({ immediate = false } = {}) {
+    if (!provider || !narrModel) return
     const now = Date.now()
     if (narrationCount >= 3) return
-    if (toolEvents.length < 3 && now - lastNarrationAt < 15000) return
-    if (now - lastNarrationAt < 5000) return
+    if (!immediate) {
+      if (toolEvents.length < 3 && now - lastNarrationAt < 15000) return
+      if (now - lastNarrationAt < 5000) return
+    }
     lastNarrationAt = now
     narrationCount++
     const events = toolEvents.slice(-5).map((ev, i) => `${i + 1}. ${ev}`).join('\n')
     try {
       const res = await provider.chat({
-        model,
-        messages: [{ role: 'user', content: `你是 AI 助手的进度播报员。根据以下工具调用记录，用一句简短口语化的话（不超过 30 字）概括助手现在在做什么。直接输出这句话，不加引号、不解释。\n\n工具调用记录：\n${events}` }],
+        model: narrModel,
+        messages: [{ role: 'user', content: buildNarrationPrompt(reqBrief, events, lastNarration) }],
         max_tokens: 80,
         stream: false,
       })
       const status = (res?.content || '').trim().replace(/^["「""']+|["「""']+$/g, '').slice(0, 40)
-      if (status) try { e.reply(`💭 ${status}`, false, { recallMsg: recall }) } catch { /* noop */ }
+      if (status) {
+        lastNarration = status
+        try { e.reply(`💭 ${status}`, false, { recallMsg: recall }) } catch { /* noop */ }
+      }
     } catch { /* narrator 失败不影响主流程 */ }
   }
 
@@ -154,6 +180,8 @@ function makeReplyStream(e, { progress = true, recall = 3, provider = null, mode
       const now = Date.now()
       const name = tc?.name
       if (!name) return
+      // 短路工具（如 clarify）：参数本身就是最终回复，发进度=与最终回复重复，跳过
+      if (shortCircuitTools.includes(name)) return
       if (name === lastTool && now - lastAt < 5000) return
       if (now - lastAt < MIN_INTERVAL) return
       lastAt = now
@@ -166,6 +194,20 @@ function makeReplyStream(e, { progress = true, recall = 3, provider = null, mode
       // utility narrator：记录事件 + fire-and-forget 触发
       toolEvents.push(msg.replace(/…$/, ''))
       tryNarrate() // 不 await，不阻塞主循环
+    },
+    // 工具结束（含失败）：检测到失败时，立即触发一次贴合上下文的自然语言播报（"搜索没响应，换方法重试"）
+    onToolEnd(tc, content) {
+      const name = tc?.name
+      if (!name || shortCircuitTools.includes(name)) return
+      let failed = false
+      if (typeof content === 'string') {
+        const s = content.slice(0, 200)
+        if (/"error"\s*:/.test(s) || /rejected_by_(policy|confirm)/.test(s) || /Tool '.*' not found/.test(s)) failed = true
+      }
+      if (!failed) return
+      const label = PROGRESS_LABELS[name] || name
+      toolEvents.push(`${label}失败`)
+      tryNarrate({ immediate: true })
     },
   }
 }
@@ -600,12 +642,13 @@ export class Chat extends plugin {
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
     if (wantProgress) await this.e.reply('思考中…')
-    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model })
+    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model, utilityModel: cfg.utilityModel || null, shortCircuitTools: rt.agent.shortCircuitTools, userText: text })
     try {
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
+        ...(rs.onToolEnd ? { onToolEnd: rs.onToolEnd } : {}),
         // OpenClaw 式中途播报：模型在调工具时附带的中途文本（思路/进展）实时转发给用户，不丢弃
         onAssistant: (res) => {
           if (res?.toolCalls?.length && res?.content && cfg.reply?.narrate !== false) {
