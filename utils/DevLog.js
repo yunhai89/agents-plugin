@@ -17,7 +17,6 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import pino from 'pino'
 import Config from './Config.js'
 
 let _logger = null
@@ -27,28 +26,29 @@ function cfg() {
   return Config.get().agent?.devLog || {}
 }
 
-/** 懒建 pino logger（按天轮转文件）；未启用/失败返回 null */
-function getLogger() {
+/** 懒建 pino logger（按天轮转文件）；未启用/失败/pino 未装 返回 null（绝不拖垮插件） */
+async function getLogger() {
   if (_failed) return null
   if (cfg().enable === false) return null
   if (_logger) return _logger
   const c = cfg()
-  const dir = c.dir ? path.resolve(c.dir) : path.join(Config.path.yunzai, 'data/agents-plugin/logs')
+  const dir = c.dir ? path.resolve(c.dir) : Config.path.logs
   try { fs.mkdirSync(dir, { recursive: true }) } catch { /* noop */ }
   try {
+    // 动态 import：pino/pino-roll 未安装时不让插件崩溃（dev 日志自动关闭）
+    const { default: pino } = await import('pino')
     const transport = pino.transport({
       target: 'pino-roll',
       options: { file: path.join(dir, 'dev'), extension: '.log', frequency: 'daily', mkdir: true },
     })
-    // transport 跑在 worker，错误绝不冒泡拖垮主进程
-    transport.on?.('error', () => {})
+    transport.on?.('error', () => {}) // transport(worker)错误绝不冒泡拖垮主进程
     _logger = pino(
       { level: c.level || 'debug', base: null, timestamp: pino.stdTimeFunctions.isoTime },
       transport,
     )
     return _logger
   } catch (e) {
-    console.error('[agents-dev] dev 日志初始化失败（已关闭）：', e?.message || e)
+    console.warn('[agents-dev] dev 日志未启用（pino 未装或初始化失败）：', e?.code || e?.message || e)
     _failed = true
     return null
   }
@@ -60,8 +60,8 @@ function getLogger() {
  * @param {object} data 任意结构数据（完整记录，不截断）
  * @param {string|null} traceId 本次 AI 调用的 traceId（串联整条链路；与 Agent taskId 一致）
  */
-export default function devLog(event, data = {}, traceId = null) {
-  const log = getLogger()
+export default async function devLog(event, data = {}, traceId = null) {
+  const log = await getLogger()
   if (!log) return
   const obj = { event, traceId, ...(data || {}) }
   const isError = data && (data.status === 'error' || data.error || data.resolveError || data.stopReason === 'blocked' || data.stopReason === 'max_turns')

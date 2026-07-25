@@ -44,7 +44,7 @@ export const transcribeMediaTool = {
     // 视频 → 提取音频
     let audioPath = p
     if (isVideo) {
-      const tmpDir = path.join(process.cwd(), 'temp', 'agents-plugin')
+      const tmpDir = Config.path.temp
       fs.mkdirSync(tmpDir, { recursive: true })
       audioPath = path.join(tmpDir, `stt_${Date.now()}.mp3`)
       const r = await runShell(`ffmpeg -y -i ${shellQuote(p)} -vn -acodec libmp3lame -q:a 4 ${shellQuote(audioPath)}`, { timeout: 180 })

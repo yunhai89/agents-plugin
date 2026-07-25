@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Log from '../utils/Log.js'
+import Config from '../utils/Config.js'
 import { buildHtml, mdToHtml } from '../model/render/index.js'
 import { inlineImages } from '../model/render/inline-images.js'
 
@@ -31,7 +32,7 @@ export async function screenshot(name, html) {
     if (!puppeteer?.screenshot) return null
 
     const safe = String(name || 'agents').replace(/[\\/]/g, '_')
-    const dir = path.join(process.cwd(), 'temp', 'agents-plugin')
+    const dir = Config.path.temp
     await fs.promises.mkdir(dir, { recursive: true }).catch(() => {})
     // 清理同 name 的旧临时模板，避免磁盘无限堆积
     try {

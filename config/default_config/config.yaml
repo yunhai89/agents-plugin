@@ -119,6 +119,8 @@ agent:
     enable: true            # Python 精确计算工具（数学/统计/大数等，沙箱执行，避免模型心算出错）
     python: "python3"       # python 可执行文件（容器内路径不同可改，如 /usr/sbin/python3）
     timeout: 10             # 单次计算超时（秒，防死循环）
+  document:
+    soffice: "soffice"      # LibreOffice 可执行名/路径（file_to_pdf 转任意文件；容器装 libreoffice 后填，如 /usr/bin/soffice）
   stt:
     apiBase: ""             # Whisper 兼容 STT API 地址（如 https://api.openai.com/v1/audio/transcriptions）
     apiKey: ""              # STT API Key（OpenAI/Groq/Azure 等）

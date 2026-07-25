@@ -158,7 +158,13 @@ function save(data = _data) {
 }
 
 load()
-startWatch()
+// startWatch 不在 import 时自动启动（fs.watch 会让测试进程不退出）；由应用入口显式调用
+let _watchStarted = false
+function startWatchOnce() {
+  if (_watchStarted) return
+  _watchStarted = true
+  startWatch()
+}
 
 export default {
   pkg,
@@ -170,10 +176,17 @@ export default {
     defaultConfig: defaultDir,
     userConfig: userConfigPath,
     legacyUserConfig: legacyUserConfigPath,
+    // 插件自用目录（一切文件存这里，绝不写到 TRSS 根 / TRSS data）
+    data: path.join(PLUGIN_DIR, 'data'),
+    temp: path.join(PLUGIN_DIR, 'data', 'temp'),
+    logs: path.join(PLUGIN_DIR, 'data', 'logs'),
+    memories: path.join(PLUGIN_DIR, 'data', 'memories'),
+    personas: path.join(PLUGIN_DIR, 'data', 'personas'),
   },
   get: () => _data,
   set: (key, value) => { _data[key] = value },
   reload,
   save,
   onChange,
+  startWatch: startWatchOnce,
 }

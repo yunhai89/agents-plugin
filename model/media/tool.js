@@ -15,10 +15,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import Config from '../../utils/Config.js'
 import { resolveMedia, isTextLike, isTextLike as _isText, truncateText, mimeFromName } from './resolve.js'
 import { excelBufferToText } from '../document/excel.js'
 
-const TEMP_DIR = () => path.join(process.cwd(), 'temp', 'agents-plugin')
+const TEMP_DIR = () => Config.path.temp
 
 /** 把二进制办公文档落到临时文件，返回路径（供 read_excel/read_pdf 等工具消费） */
 function writeTempFile(mf) {

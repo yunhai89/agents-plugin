@@ -30,7 +30,7 @@ const PHASE_LABEL = {
 }
 
 function tempDir() {
-  return path.join(Config.path.yunzai, 'temp/agents-plugin')
+  return Config.path.temp
 }
 
 export class Research extends plugin {

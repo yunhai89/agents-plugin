@@ -1,4 +1,5 @@
 import plugin from '../../../lib/plugins/plugin.js'
+import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -49,6 +50,7 @@ import { calcTool } from '../model/calc/index.js'
 import { sendFileTool } from '../model/document/sendfile.js'
 import { readPdfTool } from '../model/document/pdf.js'
 import { createExcelTool, readExcelTool } from '../model/document/excel.js'
+import { fileToPdfTool } from '../model/document/topdf.js'
 import { transcribeMediaTool } from '../model/document/media_stt.js'
 import { screenshot, renderReplyImage } from './render.js'
 
@@ -72,6 +74,7 @@ const PROGRESS_LABELS = {
   list_group_files: '📎 列出文件',
   terminal: '💻 执行命令',
   calculate: '🧮 计算中',
+  file_to_pdf: '📄 转PDF',
   process: '💻 进程操作',
   group_info: '⚙️ 查群信息',
   group_members: '⚙️ 查成员',
@@ -122,7 +125,7 @@ function extractArgHint(args, name) {
   if (!a || typeof a !== 'object') return null
   const fields = {
     web_search: 'query', miyoushe_search: 'keyword', memory_search: 'query',
-    calculate: 'code', terminal: 'command', create_excel: 'filename',
+    calculate: 'code', terminal: 'command', create_excel: 'filename', file_to_pdf: 'path',
     read_pdf: 'path', read_excel: 'path', transcribe_media: 'path',
     send_file: 'path', get_chat_history: 'count', get_group_file: 'name',
     group_member: 'userId', group_info: 'groupId',
@@ -270,6 +273,37 @@ function getKv() {
   return memoryKv()
 }
 
+// 一次性把旧「TRSS data 目录」下的插件数据迁到插件自己目录（Config.path.data 下）。幂等。
+// memories/personas 等持久数据；首次迁移后旧目录留空壳（不删，避免误伤）。
+function migratePluginData() {
+  try {
+    const moves = [
+      ['memories', Config.path.memories],
+      ['personas', Config.path.personas],
+    ]
+    for (const [name, dst] of moves) {
+      const src = path.join(Config.path.yunzai, 'data/agents-plugin', name)
+      if (!fs.existsSync(src)) continue
+      // 目标已有内容则不迁（避免覆盖）
+      let dstHas = false
+      try { dstHas = fs.existsSync(dst) && fs.readdirSync(dst).length > 0 } catch { /* noop */ }
+      if (dstHas) continue
+      try { fs.mkdirSync(path.dirname(dst), { recursive: true }) } catch { /* noop */ }
+      // 整目录搬移（rename 跨设备会失败 → 退化逐项复制）
+      try { fs.renameSync(src, dst); Log.mark('[migrate] 迁移', name, '→', dst); continue }
+      catch { /* 跨设备，走逐项复制 */ }
+      try {
+        fs.mkdirSync(dst, { recursive: true })
+        for (const f of fs.readdirSync(src)) {
+          const s = path.join(src, f), d = path.join(dst, f)
+          fs.copyFileSync(s, d)
+        }
+        Log.mark('[migrate] 复制', name, '→', dst, '（旧目录保留）')
+      } catch (e) { Log.warn('[migrate] 迁移失败', name, e?.message || e) }
+    }
+  } catch { /* noop */ }
+}
+
 async function buildRuntime() {
   const cfg = Config.get().agent || {}
   if (!cfg.apiKey) throw new Error(`未配置 agent.apiKey，请编辑「${Config.path.userConfig}」的 agent.apiKey（注意是 Yunzai 根目录的 config/，不是插件目录里的 default_config）`)
@@ -286,9 +320,11 @@ async function buildRuntime() {
     ...(cfg.reasoningFields ? { reasoningFields: cfg.reasoningFields } : {}),
   })
 
-  const memoryDir = path.join(Config.path.yunzai, 'data/agents-plugin/memories')
+  // 一切数据存插件自己目录（Config.path.data 下）；首次运行把旧 TRSS data 目录的数据迁过来
+  migratePluginData()
+  const memoryDir = Config.path.memories
   const memory = new MemoryStore({ dir: memoryDir })
-  const personaDir = path.join(Config.path.yunzai, 'data/agents-plugin/personas')
+  const personaDir = Config.path.personas
   const personaStore = new PersonaStore({ dir: personaDir })
   const K = getKv()
   const session = new SessionStore({ kv: K })
@@ -364,6 +400,7 @@ async function buildRuntime() {
   tools.register(createExcelTool) // create_excel：创建带样式 Excel
   tools.register(readExcelTool) // read_excel：读取 Excel 为表格文本
   tools.register(transcribeMediaTool) // transcribe_media：音视频转文字(STT)
+  tools.register(fileToPdfTool) // file_to_pdf：任意文件转 PDF 并发送
 
   // skill 工具：模型主动调用 skill 的通道（按 name 加载说明书正文）—— 渐进式披露的载入入口
   tools.register(makeSkillTool(skills))
@@ -472,6 +509,7 @@ Config.onChange(() => {
   invalidateRuntime()
   Log.info('[config] 配置已热加载，运行时将在下次对话重建')
 })
+Config.startWatch() // 应用入口启动配置文件监听（不在 Config import 时启动，免得测试进程不退出）
 
 // 供 apps/research.js 等复用已装配的 provider / 工具集
 export { getRuntime }

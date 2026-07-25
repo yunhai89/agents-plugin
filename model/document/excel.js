@@ -5,13 +5,14 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import Config from '../../utils/Config.js'
 
 async function getExcelJS() {
   const m = await import('exceljs')
   return m.default || m
 }
 
-const TEMP_DIR = () => path.join(process.cwd(), 'temp', 'agents-plugin')
+const TEMP_DIR = () => Config.path.temp
 
 function thinBorder() {
   const s = { style: 'thin', color: { argb: 'FFCCCCCC' } }
