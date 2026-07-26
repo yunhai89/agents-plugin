@@ -90,6 +90,13 @@ async function renderHighQuality(html, { scale = 3, width = 800, imgType = 'jpeg
     await page.setViewport({ width, height: 1200, deviceScaleFactor: scale })
     await page.waitForSelector('#container', { timeout: 8000 }).catch(() => {})
     await new Promise((r) => setTimeout(r, 200)) // 字体/布局/图片稳定
+    // 截 #container 元素本身（紧贴卡片 border-box），避免内容少时 fullPage 把视口/body 背景一起截进来、多出大片空白
+    const el = await page.$('#container')
+    if (el) {
+      const opt = { type: imgType }
+      if (imgType === 'jpeg') opt.quality = quality
+      return el.screenshot(opt)
+    }
     const opt = { type: imgType, fullPage: true }
     if (imgType === 'jpeg') opt.quality = quality
     return page.screenshot(opt)
