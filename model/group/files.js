@@ -253,9 +253,15 @@ export const moveGroupFileTool = defineTool({
       if (!folder?.folderId) return { error: `未找到目标文件夹：${p.targetFolderName}`, availableFolders: fs.folders.map((x) => x.name) }
       targetDir = String(folder.folderId)
     }
-    // napcat 不同版本目标文件夹参数名不一（新版 folder_id / 旧版 target_dir），同时传两套兼容，避免 "Schema compilation error: Expected required property"
-    const r = await sendApi(ctx, 'move_group_file', { group_id: gid, file_id: String(file.fileId), folder_id: String(targetDir), target_dir: String(targetDir) })
-    if (!r.ok) return { error: `移动失败：${r.error}（若反复出现是 napcat 版本的 move_group_file schema 问题，建议升级 napcat 或手动移动）`, napcat: r.raw }
+    // napcat move_group_file 实际要 current_parent_directory(文件当前目录) + target_parent_directory(目标)；根目录用 "/"
+    // （查 napcat.mjs DTO 确认，不是 folder_id/target_dir；仓库 napcat-api-doc.md 记的是错字段名）
+    const r = await sendApi(ctx, 'move_group_file', {
+      group_id: gid,
+      file_id: String(file.fileId),
+      current_parent_directory: String(file.pid || '/'),
+      target_parent_directory: String(targetDir || '/'),
+    })
+    if (!r.ok) return { error: `移动失败：${r.error}`, napcat: r.raw }
     return { ok: true, groupId: gid, file: file.name || file.fileId, movedTo: p.targetFolderName || (targetDir || '根目录') }
   },
 })
