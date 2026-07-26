@@ -270,6 +270,7 @@ let _runtime = null
 let _runtimePromise = null // in-flight buildRuntime()，并发安全：多调用方共享同一次构建
 let _runtimeFailed = null  // buildRuntime 失败原因缓存；非 null 则 getRuntime 直接抛、不再重试，避免每条消息刷屏重建
 let _initErrLogged = false // 初始化失败日志限首（防每条消息重复打 ERRO）
+const _initFailNotified = new Set() // 已提示过"初始化失败"的用户(每用户仅提示一次，防刷屏)；runtime 重建时清
 const _clearPending = new Map() // userId → 确认清空的时间戳（2 步确认）
 
 function getKv() {
@@ -511,6 +512,7 @@ function invalidateRuntime() {
   _runtimePromise = null
   _runtimeFailed = null  // 配置已变更：清失败缓存，下次 getRuntime 用新配置重试
   _initErrLogged = false // 允许再次记录初始化失败（若仍失败）
+  _initFailNotified.clear() // runtime 重建：重置"已提示"标记，下次失败可再提示用户
 }
 
 // 热加载：配置文件变更 → 失效运行时单例，下次对话用新配置重建（无需重启框架）
@@ -685,8 +687,12 @@ export class Chat extends plugin {
     try {
       rt = await getRuntime()
     } catch (e) {
-      // 运行时初始化失败（如 apiKey 未配置）：静默不回复，避免群里每条 @ 都刷一条错误；
-      // 失败原因已在 getRuntime 首次记日志；修复 config（热加载）后自动恢复
+      // 运行时初始化失败（如 apiKey 未配置）：每个用户仅提示一次（避免群里刷屏），修复 config（热加载）后自动恢复
+      const _uid = String(this.e.user_id || '')
+      if (_uid && !_initFailNotified.has(_uid)) {
+        _initFailNotified.add(_uid)
+        try { await this.e.reply(`⚠️ ${e?.message || '插件初始化失败'}。修复后保存 config 即自动恢复。`) } catch { /* noop */ }
+      }
       return false
     }
     const cfg = Config.get().agent || {}
