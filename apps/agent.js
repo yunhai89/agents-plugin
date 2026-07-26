@@ -268,6 +268,8 @@ function makeReplyStream(e, {
 
 let _runtime = null
 let _runtimePromise = null // in-flight buildRuntime()，并发安全：多调用方共享同一次构建
+let _runtimeFailed = null  // buildRuntime 失败原因缓存；非 null 则 getRuntime 直接抛、不再重试，避免每条消息刷屏重建
+let _initErrLogged = false // 初始化失败日志限首（防每条消息重复打 ERRO）
 const _clearPending = new Map() // userId → 确认清空的时间戳（2 步确认）
 
 function getKv() {
@@ -489,12 +491,15 @@ async function buildRuntime() {
 
 async function getRuntime() {
   if (_runtime) return _runtime
+  // 失败缓存：apiKey 等配置类错误一旦发生，直接抛缓存原因，不再每条消息重新 buildRuntime
+  // （否则每条群消息都重建+抛错+回复，刷屏 + 日志爆炸）。配置热加载后 invalidateRuntime 清缓存重试。
+  if (_runtimeFailed) throw _runtimeFailed
   // 并发安全：启动期各 apps 构造器 / 首条消息可能并发调 getRuntime，
   // 复用同一个 in-flight buildRuntime()，避免运行时被构建多次（否则 MCP 会重复连接注册、日志打两遍）。
   if (!_runtimePromise) {
     _runtimePromise = buildRuntime()
-      .then((rt) => { _runtime = rt; return rt })
-      .catch((e) => { _runtimePromise = null; throw e })
+      .then((rt) => { _runtime = rt; _runtimeFailed = null; return rt })
+      .catch((e) => { _runtimeFailed = e; _runtimePromise = null; throw e })
       .finally(() => { _runtimePromise = null })
   }
   return _runtimePromise
@@ -504,6 +509,8 @@ async function getRuntime() {
 function invalidateRuntime() {
   _runtime = null
   _runtimePromise = null
+  _runtimeFailed = null  // 配置已变更：清失败缓存，下次 getRuntime 用新配置重试
+  _initErrLogged = false // 允许再次记录初始化失败（若仍失败）
 }
 
 // 热加载：配置文件变更 → 失效运行时单例，下次对话用新配置重建（无需重启框架）
@@ -635,7 +642,7 @@ export class Chat extends plugin {
     })
     getRuntime()
       .then((rt) => rt.schedule.restore(fireReminder).catch(() => {}))
-      .catch((e) => Log.error('agent 初始化失败', e?.message || e))
+      .catch((e) => { if (!_initErrLogged) { _initErrLogged = true; Log.error('agent 初始化失败（修复 config 后重启，或保存 config 触发热加载自动恢复）', e?.message || e) } })
   }
 
   // —— AI 触发 ——
@@ -678,8 +685,9 @@ export class Chat extends plugin {
     try {
       rt = await getRuntime()
     } catch (e) {
-      await this.e.reply(String(e?.message || e))
-      return true
+      // 运行时初始化失败（如 apiKey 未配置）：静默不回复，避免群里每条 @ 都刷一条错误；
+      // 失败原因已在 getRuntime 首次记日志；修复 config（热加载）后自动恢复
+      return false
     }
     const cfg = Config.get().agent || {}
     const ctx = ctxOf(this.e)
