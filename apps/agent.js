@@ -428,7 +428,7 @@ async function buildRuntime() {
   const mcp = new McpManager({ registry: tools, logger: Log.tag('mcp'), requestTimeout: cfg.mcp?.requestTimeout })
   mcp.start(cfg.mcp?.servers || {}).catch((e) => Log.error('[mcp] 启动失败', e?.message || e))
 
-  const agent = new Agent({
+  const agentConfig = {
     provider,
     model: cfg.model,
     tools,
@@ -457,7 +457,10 @@ async function buildRuntime() {
     stickers: getStickerManager({ logger: Log.tag('sticker') }), // 表情包清单注入（_assembleSystem 用 catalog()）
     devLog: (event, data, traceId, scope) => devLog(event, data, traceId, scope), // 详细 trace（框架无关，pino 文件）；库零依赖，由 apps 注入
     logger: Log.tag('agent'),
-  })
+  }
+  // 多例：每请求 new Agent（共享 provider/tools/session 等引用，但 this.messages 各自独立）
+  // → 并发 run 不再互相覆盖 this.messages，根治串会话/艾特错人，且不同用户真并发（不排队）
+  const makeAgent = () => new Agent(agentConfig)
 
   // 视觉子模型（A 方案）：主模型不支持视觉时，由它把图片转成文本描述喂给主模型
   let vision = null
@@ -487,7 +490,7 @@ async function buildRuntime() {
     }
   }
 
-  return { agent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
+  return { agentConfig, makeAgent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
 }
 
 async function getRuntime() {
@@ -824,7 +827,7 @@ export class Chat extends plugin {
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
     if (wantProgress) await this.e.reply('思考中…')
-    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model, utilityModel: cfg.utilityModel || null, shortCircuitTools: rt.agent.shortCircuitTools, userText: text })
+    const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model, utilityModel: cfg.utilityModel || null, shortCircuitTools: ['clarify'], userText: text })
     try {
       // 喂给模型的首条 user 输入（追"AI 实际看到什么"：附件正文/文件名有没有进上下文、走纯文本还是多模态块、模型能力如何）
       const __inputText = typeof input === 'string' ? input
@@ -837,7 +840,7 @@ export class Chat extends plugin {
         inputText: __inputText, // 喂给模型的全部文本（含附件正文/降级说明；trace 不截断）——看附件有没有带文件名
         attachments: (ctx.media || []).map((f) => ({ name: f.name, source: f.source, kind: f.kind, bytes: f.bytes ?? null, status: f.resolveError || 'ok' })),
       }, traceId, ctx.devScope)
-      const { content, stopReason, turns, usage } = await rt.agent.run(input, {
+      const { content, stopReason, turns, usage } = await rt.makeAgent().run(input, {
         ctx, systemPrompt, context,
         taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
         stream: wantStream,
@@ -982,7 +985,7 @@ export class Chat extends plugin {
   async switchModel() {
     const id = this.e.msg.replace(/^#模型切换\s+/, '').trim()
     const rt = await getRuntime()
-    rt.agent.model = id
+    rt.agentConfig.model = id
     try {
       const c = Config.get()
       if (!c.agent) c.agent = {}
