@@ -308,7 +308,7 @@ function migratePluginData() {
 
 async function buildRuntime() {
   const cfg = Config.get().agent || {}
-  if (!cfg.apiKey) throw new Error(`未配置 agent.apiKey，请编辑「${Config.path.userConfig}」的 agent.apiKey（注意是 Yunzai 根目录的 config/，不是插件目录里的 default_config）`)
+  if (!cfg.apiKey) throw new Error(`未配置 agent.apiKey：请编辑「${Config.path.userConfig}」填入 agent.apiKey（OpenAI 兼容接口密钥，如 DeepSeek/OpenAI/智谱/mimo）。该文件是插件自己的配置（首次启动已自动生成），不是 default_config。`)
 
   const protocol = cfg.protocol || 'openai'
   const presetMap = protocol === 'anthropic' ? anthropicPresets : openaiPresets

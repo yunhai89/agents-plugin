@@ -9,7 +9,7 @@ agent:
   protocol: openai
   preset: deepseek
   baseURL: ""
-  apiKey: ""
+  apiKey: ""               # ★必填：OpenAI 兼容接口的 API Key（DeepSeek/OpenAI/智谱/mimo 等）；留空则插件不初始化
   model: "deepseek-chat"
   utilityModel: ""  # 进度播报等旁路任务用的小模型 id（留空=沿用主模型；填主 provider 支持的小模型 id 可降本）
   reasoningFields: []
