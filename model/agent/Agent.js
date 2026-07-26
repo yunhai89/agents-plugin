@@ -109,6 +109,18 @@ export class Agent {
    *   ctx = { role, isMaster, userId, groupId, isGroup, isGroupAdmin, notify, fetcher, ... }
    */
   async run(input, opts = {}) {
+    // 单例 Agent 的 this.messages 是实例状态，两个用户并发 run 会互相覆盖 this.messages
+    // → 回复串进对方会话 + 艾特错人。用 Promise 链串行化 run，避免覆盖。
+    // （长期优化：run 内改局部 messages + 子方法传参，可让不同用户并发、提升吞吐）
+    const prev = this._runLock
+    let _unlock
+    this._runLock = new Promise((r) => { _unlock = r })
+    if (prev) await prev.catch(() => {})
+    try { return await this._runImpl(input, opts) }
+    finally { _unlock() }
+  }
+
+  async _runImpl(input, opts = {}) {
     const cb = {
       onDelta: opts.onDelta,
       onReasoning: opts.onReasoning,
