@@ -121,7 +121,7 @@ export async function sendApi(ctx, action, params = {}) {
   try {
     const res = await bot.sendApi(action, params)
     if (res && (res.status === 'ok' || res.retcode === 0)) return { ok: true, data: res.data }
-    return { ok: false, error: res?.message || res?.wording || `动作 ${action} 失败（retcode=${res?.retcode}）`, retcode: res?.retcode }
+    return { ok: false, error: res?.message || res?.wording || `动作 ${action} 失败（retcode=${res?.retcode}）`, retcode: res?.retcode, raw: res }
   } catch (e) {
     return { ok: false, error: `动作 ${action} 异常：${e?.message || e}` }
   }
