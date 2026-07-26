@@ -253,7 +253,8 @@ export const moveGroupFileTool = defineTool({
       if (!folder?.folderId) return { error: `未找到目标文件夹：${p.targetFolderName}`, availableFolders: fs.folders.map((x) => x.name) }
       targetDir = String(folder.folderId)
     }
-    const r = await sendApi(ctx, 'move_group_file', { group_id: gid, file_id: String(file.fileId), target_dir: targetDir })
+    // napcat 不同版本目标文件夹参数名不一（新版 folder_id / 旧版 target_dir），同时传两套兼容，避免 "Schema compilation error: Expected required property"
+    const r = await sendApi(ctx, 'move_group_file', { group_id: gid, file_id: String(file.fileId), folder_id: String(targetDir), target_dir: String(targetDir) })
     if (!r.ok) return { error: r.error }
     return { ok: true, groupId: gid, file: file.name || file.fileId, movedTo: p.targetFolderName || (targetDir || '根目录') }
   },
