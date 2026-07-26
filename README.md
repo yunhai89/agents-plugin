@@ -92,7 +92,10 @@
 ## 📦 安装
 
 ```bash
+# Gitee（国内推荐）：
 git clone https://gitee.com/YunXi-67/agents-plugin.git ./plugins/agents-plugin
+# 或 GitHub：
+git clone https://github.com/yunhai89/agents-plugin.git ./plugins/agents-plugin
 cd ./plugins/agents-plugin && npm install      # 安装 markdown 渲染依赖（marked / highlight.js）
 ```
 
@@ -101,8 +104,8 @@ cd ./plugins/agents-plugin && npm install      # 安装 markdown 渲染依赖（
 
 ### 🖼️ 图片回复（默认开启）
 
-机器人回复**默认渲染成精美浅色图片**（完整 markdown + 代码语法高亮），渲染失败自动退文本。配置 `agent.reply.mode`：
-- `image`（默认）：markdown → 浅色卡片图片（标题/列表/代码高亮/表格/引用全支持）
+机器人回复**默认渲染成精美暗色卡片图片**（完整 markdown + 代码语法高亮），渲染失败自动退文本。配置 `agent.reply.mode`：
+- `image`（默认）：markdown → 暗色卡片图片（标题/列表/代码高亮/表格/引用全支持）
 - `text`：纯文本回复
 
 > 配置文件在插件目录内（不在 Yunzai 根）。若你之前用的是旧版 `Yunzai/config/agents-plugin.yaml`，首次加载会**自动迁移**到插件目录并删除旧文件（apiKey/masters 等全部保留）。
