@@ -12,6 +12,8 @@ agent:
   apiKey: ""               # ★必填：OpenAI 兼容接口的 API Key（DeepSeek/OpenAI/智谱/mimo 等）；留空则插件不初始化
   model: "deepseek-chat"
   utilityModel: ""  # 进度播报等旁路任务用的小模型 id（留空=沿用主模型；填主 provider 支持的小模型 id 可降本）
+  fallbackModels: []  # 回退模型：主模型失败时依次尝试（同 provider 的模型 id 数组，如 [gpt-4o, gemini-pro]）
+  proxy: ""  # HTTP/SOCKS 代理（如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）；国内服务器访问 GPT/Gemini 等海外 LLM 用，留空=直连
   reasoningFields: []
   maxTurns: 50
   temperature: 0.2  # 工具调用稳定性（建议 0.1~0.3；勿设 0 避免复读式回复）

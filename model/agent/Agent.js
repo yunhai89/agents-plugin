@@ -96,6 +96,9 @@ export class Agent {
     this.reflect = config.reflect ?? 'auto'
     this.reflectMaxIterations = config.reflectMaxIterations ?? 1
 
+    this.fallbackModels = config.fallbackModels
+    // 回退模型列表（数组或逗号字符串 → 数组）；主模型失败时依次尝试
+    this._fallbackList = (Array.isArray(config.fallbackModels) ? config.fallbackModels : config.fallbackModels ? String(config.fallbackModels).split(',').map((s) => s.trim()).filter(Boolean) : [])
     this.messages = []
   }
 
@@ -192,21 +195,21 @@ export class Agent {
       }
 
       const __t0 = Date.now()
-      const result = await this.provider.chat({
-        model: this.model,
-        messages: this.messages,
-        system,
-        tools: toolList.length ? toolList : undefined,
-        tool_choice: this.toolChoice,
-        temperature: this.temperature,
-        max_tokens: this.maxTokens,
-        thinking: this.thinking,
-        signal,
-        stream: wantStream,
-        onDelta: cb.onDelta,
-        onReasoning: cb.onReasoning,
+      // 主模型失败时依次尝试回退模型（同 provider 换 model id）
+      const __chatWith = (m) => this.provider.chat({
+        model: m, messages: this.messages, system,
+        tools: toolList.length ? toolList : undefined, tool_choice: this.toolChoice,
+        temperature: this.temperature, max_tokens: this.maxTokens, thinking: this.thinking,
+        signal, stream: wantStream, onDelta: cb.onDelta, onReasoning: cb.onReasoning,
         ...this._extraRunOpts(opts),
       })
+      const __models = [this.model, ...this._fallbackList]
+      let result, lastErr
+      for (const m of __models) {
+        try { result = await __chatWith(m); break }
+        catch (e) { lastErr = e; if (__models.length > 1) this.logger('warn', `[fallback] 模型 ${m} 失败，尝试下一个`, e?.message || e) }
+      }
+      if (!result) throw lastErr
       const __ms = Date.now() - __t0
       if (result.usage) usage = mergeUsage(usage, result.usage)
       turns++

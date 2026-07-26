@@ -309,6 +309,19 @@ function migratePluginData() {
   } catch { /* noop */ }
 }
 
+// 构造走代理的 fetch（undici ProxyAgent）；undici 未装/地址错则返回 null（直连）。供 provider 访问海外 LLM（GPT/Gemini 等）
+async function makeProxyFetch(proxy) {
+  if (!proxy) return null
+  try {
+    const { ProxyAgent, fetch: uFetch } = await import('undici')
+    const dispatcher = new ProxyAgent(proxy)
+    return (url, opts = {}) => uFetch(url, { ...opts, dispatcher })
+  } catch (e) {
+    Log.warn('[provider] 代理不可用（undici 未装或地址错误），将直连', e?.message || e)
+    return null
+  }
+}
+
 async function buildRuntime() {
   const cfg = Config.get().agent || {}
   if (!cfg.apiKey) throw new Error(`未配置 agent.apiKey：请编辑「${Config.path.userConfig}」填入 agent.apiKey（OpenAI 兼容接口密钥，如 DeepSeek/OpenAI/智谱/mimo）。该文件是插件自己的配置（首次启动已自动生成），不是 default_config。`)
@@ -316,6 +329,7 @@ async function buildRuntime() {
   const protocol = cfg.protocol || 'openai'
   const presetMap = protocol === 'anthropic' ? anthropicPresets : openaiPresets
   const preset = cfg.preset ? presetMap[cfg.preset] : {}
+  const proxyFetch = cfg.proxy ? await makeProxyFetch(cfg.proxy) : null
   const provider = createProvider({
     protocol,
     ...preset,
@@ -323,6 +337,7 @@ async function buildRuntime() {
     apiKey: cfg.apiKey,
     model: cfg.model,
     ...(cfg.reasoningFields ? { reasoningFields: cfg.reasoningFields } : {}),
+    ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
 
   // 一切数据存插件自己目录（Config.path.data 下）；首次运行把旧 TRSS data 目录的数据迁过来
@@ -431,6 +446,7 @@ async function buildRuntime() {
   const agentConfig = {
     provider,
     model: cfg.model,
+    fallbackModels: cfg.fallbackModels,
     tools,
     memory,
     session,
@@ -484,6 +500,7 @@ async function buildRuntime() {
         describePrompt: vcfg.describePrompt || undefined,
         maxTokens: vcfg.maxTokens || 1024,
         logger: Log.tag('vision'),
+        ...(proxyFetch ? { fetch: proxyFetch } : {}),
       })
     } catch (e) {
       Log.warn('[vision] 视觉子模型装配失败，主模型不支持视觉时图片将降级', e?.message || e)
