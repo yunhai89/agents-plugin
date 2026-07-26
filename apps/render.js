@@ -90,16 +90,22 @@ async function renderHighQuality(html, { scale = 3, width = 800, imgType = 'jpeg
     await page.setViewport({ width, height: 1200, deviceScaleFactor: scale })
     await page.waitForSelector('#container', { timeout: 8000 }).catch(() => {})
     await new Promise((r) => setTimeout(r, 200)) // 字体/布局/图片稳定
+    const opt = { type: imgType }
+    if (imgType === 'jpeg') opt.quality = quality
     // 截 #container 元素本身（紧贴卡片 border-box），避免内容少时 fullPage 把视口/body 背景一起截进来、多出大片空白
     const el = await page.$('#container')
     if (el) {
-      const opt = { type: imgType }
-      if (imgType === 'jpeg') opt.quality = quality
-      return el.screenshot(opt)
+      try { return await el.screenshot(opt) } catch { /* element 截图偶发失败 → 落到 clip 兜底 */ }
     }
-    const opt = { type: imgType, fullPage: true }
-    if (imgType === 'jpeg') opt.quality = quality
-    return page.screenshot(opt)
+    // clip 兜底：按 #container 的精确 bbox 截（同样紧贴卡片，绝不 fullPage）
+    const box = await page.evaluate(() => {
+      const e = document.querySelector('#container')
+      if (!e) return null
+      const r = e.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }).catch(() => null)
+    if (box && box.width > 0 && box.height > 0) return page.screenshot({ ...opt, clip: box })
+    return null // #container 异常 → 返回 null 走降级（Yunzai 渲染器，仍截 #container），不再 fullPage
   })
   if (!buff || !Buffer.isBuffer(buff)) return null
   const seg = (typeof segment !== 'undefined' && segment) || null
