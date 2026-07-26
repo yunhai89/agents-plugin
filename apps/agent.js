@@ -671,7 +671,9 @@ export class Chat extends plugin {
     const hasMedia = this._hasMedia(this.e)
     // 触发条件：命令匹配 ｜（@机器人 且（有文字 或 有媒体））。
     // 关键：纯引用图片/文件无文字也算触发（问题4）—— 媒体由 _handleAgent 注入默认指令处理。
-    if (!(isCmd || (atMode && isAt && (text || hasMedia)))) return false
+    // 私聊直接触发（私聊无 @，at 模式下原本不触发；私聊任何消息都该能对话）
+    const isPrivate = !this.e.isGroup
+    if (!(isPrivate || isCmd || (atMode && isAt && (text || hasMedia)))) return false
     const input = isCmd ? text.replace(cmdRe, '').trim() : text
     if (!input && !hasMedia) return false // 既无文字又无媒体（如裸 `#ai`）：不触发
     Log.mark('[trigger]', `user=${this.e.user_id} gid=${this.e.group_id || '-'} mode=${isCmd ? 'cmd' : 'at'} inputLen=${input.length} media=${hasMedia}`)
