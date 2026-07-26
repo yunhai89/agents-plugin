@@ -167,3 +167,39 @@ img { max-width: 100%; border-radius: 10px; }
 .footer { margin-top: 20px; padding-top: 14px; border-top: 1px solid #eef0f3; font-size: .76em; color: #9aa3b2; text-align: center; }
 .tip { font-size: .86em; color: #6b7280; background: #f5f8ff; border: 1px solid #e3ecff; border-radius: 10px; padding: 9px 13px; margin: 10px 0; }
 `
+
+/**
+ * 回复图专用暗色覆盖样式（REPLY_CSS）——经 buildHtml 的 extraCss 注入，覆盖 THEME_CSS 的浅色。
+ * 只影响 AI 回复图（renderReplyImage），不影响帮助图/聊天列表/人设列表（它们仍用 THEME_CSS 浅色）。
+ * github-dark 风：深色背景/卡片 + 代码 token 配色。
+ */
+export const REPLY_CSS = `
+html, body { background: #0d1117; }
+#container {
+  background: #161b22; border: 1px solid #30363d; color: #c9d1d9;
+  box-shadow: 0 12px 40px rgba(0,0,0,.45);
+}
+#container .footer { border-top: 1px solid #30363d; color: #6e7681; }
+h1, h2, h3, h4, h5, h6 { color: #e6edf3; }
+h1 { border-bottom-color: #30363d; } h2 { border-bottom-color: #21262d; }
+p { color: #c9d1d9; }
+a { color: #58a6ff; } strong, b { color: #f0f6fc; } em, i { color: #8b949e; } del { color: #6e7681; }
+:not(pre) > code { color: #ff7b72; background: #30363d; border-color: #3b4250; }
+pre { background: #161b22; border: 1px solid #30363d; }
+pre code { color: #c9d1d9; }
+pre[data-lang]::before { color: #6e7681; background: #21262d; }
+.hljs { color: #c9d1d9; background: transparent; }
+.hljs-comment, .hljs-quote { color: #6e7681; font-style: italic; }
+.hljs-keyword, .hljs-literal, .hljs-type, .hljs-name { color: #ff7b72; }
+.hljs-string, .hljs-attr, .hljs-template-string, .hljs-addition { color: #a5d6ff; }
+.hljs-number, .hljs-symbol, .hljs-bullet, .hljs-link, .hljs-meta { color: #d2a8ff; }
+.hljs-title, .hljs-title.function_, .hljs-built_in, .hljs-section { color: #d2a8ff; font-weight: 600; }
+.hljs-variable, .hljs-template-variable, .hljs-property { color: #79c0ff; }
+.hljs-tag { color: #7ee787; }
+.hljs-deletion { color: #ffa198; background: #67060c; }
+blockquote { border-left-color: #58a6ff; background: #161b22; color: #b6b8bb; }
+table th { background: #21262d; color: #e6edf3; } table th, table td { border-color: #30363d; }
+tbody tr:nth-child(even) { background: #161b22; }
+hr { border-top-color: #30363d; }
+.head { border-bottom-color: #21262d; } .head .title { color: #e6edf3; } .head .sub { color: #6e7681; }
+`

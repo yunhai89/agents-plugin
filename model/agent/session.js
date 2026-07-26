@@ -157,6 +157,13 @@ export class SessionStore {
     return (c?.messages || []).map((m) => ({ ...m }))
   }
 
+  /** 读对话 meta（id/title/createdAt/updatedAt，不含 messages），供 devLog 拼 per-会话日志文件名 */
+  async getConversationMeta(userId, groupId, convId) {
+    const c = await this.kv.get(this.convKey(userId, groupId, String(convId)))
+    if (!c) return null
+    return { id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt }
+  }
+
   async appendConversation(userId, groupId, convId, msgs) {
     const k = this.convKey(userId, groupId, String(convId))
     const c = (await this.kv.get(k)) || { id: String(convId), title: `对话 ${convId}`, messages: [], createdAt: Date.now() }

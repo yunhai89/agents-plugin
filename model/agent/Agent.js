@@ -174,7 +174,7 @@ export class Agent {
     const toolList = this.tools?.list?.() || []
     const __runStart = Date.now()
     this.logger('mark', 'run start user=', ctx?.userId, 'gid=', ctx?.groupId, 'conv=', ctx?.conversationId, 'inputLen=', rawText.length, 'msgs=', this.messages.length, 'tools=', toolList.length, 'maxTurns=', this.maxTurns)
-    this.devLog?.('run_start', { user: ctx?.userId, gid: ctx?.groupId, conv: ctx?.conversationId, scopeUserId, scopeId, model: this.model, msgs: this.messages.length, tools: toolList.length, maxTurns: this.maxTurns, inputLen: rawText.length }, taskId)
+    this.devLog?.('run_start', { user: ctx?.userId, gid: ctx?.groupId, conv: ctx?.conversationId, scopeUserId, scopeId, model: this.model, msgs: this.messages.length, tools: toolList.length, maxTurns: this.maxTurns, inputLen: rawText.length }, taskId, ctx?.devScope)
 
     while (turns < this.maxTurns) {
       if (signal?.aborted) throw new Error('aborted')
@@ -216,7 +216,7 @@ export class Agent {
         content: result.content || '', reasoning: !!result.reasoning,
         toolCalls: (result.toolCalls || []).map((tc) => ({ name: tc.name, arguments: tc.arguments })),
         usage: result.usage || null, ms: __ms,
-      }, taskId)
+      }, taskId, ctx?.devScope)
 
       const assistantMsg = {
         role: 'assistant',
@@ -242,7 +242,7 @@ export class Agent {
           })
           reflectIter++
           if (verdict?.usage) usage = mergeUsage(usage, verdict.usage)
-          this.devLog?.('reflect', { revise: !!verdict?.revise, feedback: verdict?.feedback || null, iter: reflectIter }, taskId)
+          this.devLog?.('reflect', { revise: !!verdict?.revise, feedback: verdict?.feedback || null, iter: reflectIter }, taskId, ctx?.devScope)
           if (verdict?.revise) {
             this.logger('mark', `[reflect] 自检发现需修正：${verdict.feedback || ''}——回环重做`)
             this.messages.push({ role: 'user', content: `【自检反馈】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` })
@@ -290,7 +290,7 @@ export class Agent {
     }
 
     this.logger('mark', 'run end turns=', turns, 'stop=', stopReason, 'usage=', fmtUsage(usage), 'replyLen=', (lastContent || '').length, `totalMs=${Date.now() - __runStart}`)
-    this.devLog?.('run_end', { turns, stopReason, usage, replyLen: (lastContent || '').length, totalMs: Date.now() - __runStart, usedTools }, taskId)
+    this.devLog?.('run_end', { turns, stopReason, usage, replyLen: (lastContent || '').length, totalMs: Date.now() - __runStart, usedTools }, taskId, ctx?.devScope)
     return { content: lastContent, messages: this.messages, usage, turns, taskId, stopReason }
   }
 
@@ -503,7 +503,7 @@ export class Agent {
       try { const o = JSON.parse(content); o._hint = TOOL_FAIL_HINT; content = JSON.stringify(o) }
       catch { content = content + '\n' + TOOL_FAIL_HINT } // 非 JSON 结果才回退追加
     }
-    this.devLog?.('tool', { name: tc.name, args: tc.arguments, ok: !isToolError(content), result: content, ms: Date.now() - __t }, execCtx.taskId)
+    this.devLog?.('tool', { name: tc.name, args: tc.arguments, ok: !isToolError(content), result: content, ms: Date.now() - __t }, execCtx.taskId, ctx?.devScope)
     cb.onToolEnd?.(tc, content)
     return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
   }

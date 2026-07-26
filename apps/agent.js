@@ -53,6 +53,8 @@ import { createExcelTool, readExcelTool } from '../model/document/excel.js'
 import { fileToPdfTool } from '../model/document/topdf.js'
 import { transcribeMediaTool } from '../model/document/media_stt.js'
 import { screenshot, renderReplyImage } from './render.js'
+import { REPLY_CSS } from '../model/render/theme.js'
+import { toFileSegment } from '../utils/SendFile.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
 const PLUGIN_ROOT = path.resolve(path.dirname(pathToFileURL(import.meta.url).pathname), '../..')
@@ -450,7 +452,7 @@ async function buildRuntime() {
     reflect: cfg.reflect ?? 'auto',
     reflectMaxIterations: cfg.reflectMaxIterations ?? 1,
     stickers: getStickerManager({ logger: Log.tag('sticker') }), // 表情包清单注入（_assembleSystem 用 catalog()）
-    devLog: (event, data, traceId) => devLog(event, data, traceId), // 详细 trace（框架无关，pino 文件）；库零依赖，由 apps 注入
+    devLog: (event, data, traceId, scope) => devLog(event, data, traceId, scope), // 详细 trace（框架无关，pino 文件）；库零依赖，由 apps 注入
     logger: Log.tag('agent'),
   })
 
@@ -625,6 +627,8 @@ export class Chat extends plugin {
         { reg: '^#重置人设$', fnc: 'personaReset' },
         { reg: '^#人设$', fnc: 'personaList' },
         { reg: '^#人设\\s+(.+)', fnc: 'personaSwitch' },
+        // —— 错误上报 ——
+        { reg: '^#上报错误(?:\\s+([\\s\\S]+))?$', fnc: 'reportBug' },
         // —— AI 触发（catch-all，最后匹配；@或自定义触发词）——
         { reg: '^[\\s\\S]+$', fnc: 'onTrigger', log: false },
       ],
@@ -680,13 +684,17 @@ export class Chat extends plugin {
     const cfg = Config.get().agent || {}
     const ctx = ctxOf(this.e)
     ctx.conversationId = await rt.session.getActiveConversation(ctx.scopeUserId, ctx.groupId)
+    // per-会话日志文件名所需信息；uid 用 scopeUserId 保证"同会话同文件"（群共享时为 __group__）
+    let __convMeta = null
+    try { __convMeta = await rt.session.getConversationMeta(ctx.scopeUserId, ctx.groupId, ctx.conversationId) } catch { /* noop */ }
+    ctx.devScope = { gid: ctx.groupId || 'private', uid: ctx.scopeUserId, convId: ctx.conversationId, createdAt: __convMeta?.createdAt || Date.now() }
     const traceId = randomUUID() // 串联整条链路的 dev trace id（与 Agent taskId 一致）
     devLog('trigger', {
       user: ctx.userId, gid: ctx.groupId, isGroup: ctx.isGroup, scopeUserId: ctx.scopeUserId, scopeId: ctx.scopeId, conv: ctx.conversationId,
       text: text || '',              // 用户提问原文（意图来源；trace 不截断，全文记录）
       inputLen: (text || '').length,
       hasReply: !!(this.e?.reply_id || (Array.isArray(this.e?.message) && this.e.message.some((s) => s && s.type === 'reply'))), // 是否引用了消息提问
-    }, traceId)
+    }, traceId, ctx.devScope)
 
     // —— 多模态：主动收集消息中的图片/文件，按模型能力转为协议原生内容 ——
     const protocol = cfg.protocol || 'openai'
@@ -728,7 +736,7 @@ export class Chat extends plugin {
         status: f.resolveError || 'ok',  // ok / no_url / download_failed / limit_images / limit_size
         skipReason: f.__skipReason || null,
         visionDescribed: !!f.__visionDescribed, // 图片是否已被 vision 子模型转成文本描述
-      })) }, traceId)
+      })) }, traceId, ctx.devScope)
       // 盲图判定（问题1）：有图片，主模型无视觉，且这些图片没被 vision 子模型转成文本（__visionDescribed）
       if (nImg > 0 && !caps.vision) {
         const rawImageLeft = files.some((f) => (f.kind === 'image' || (f.mime || '').startsWith('image/')) && f.buffer && !f.__visionDescribed)
@@ -814,7 +822,7 @@ export class Chat extends plugin {
         blocks: Array.isArray(input?.content) ? input.content.map((b) => ({ type: b.type, textLen: (b.text || '').length, isMedia: b.type !== 'text' })) : null,
         inputText: __inputText, // 喂给模型的全部文本（含附件正文/降级说明；trace 不截断）——看附件有没有带文件名
         attachments: (ctx.media || []).map((f) => ({ name: f.name, source: f.source, kind: f.kind, bytes: f.bytes ?? null, status: f.resolveError || 'ok' })),
-      }, traceId)
+      }, traceId, ctx.devScope)
       const { content, stopReason, turns, usage } = await rt.agent.run(input, {
         ctx, systemPrompt, context,
         taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
@@ -843,7 +851,11 @@ export class Chat extends plugin {
       if (replyMode === 'image' && body) {
         try {
           const sc = acceptMap ? rt.sticker.applyImage(body, acceptMap) : body
-          const img = await renderReplyImage(sc, { scale: cfg.reply?.renderScale ?? 2 })
+          const img = await renderReplyImage(sc, {
+          scale: cfg.reply?.renderScale ?? 3,
+          footer: `会话 #${ctx.conversationId} · 对话 ${traceId.slice(0, 8)}`,
+          extraCss: REPLY_CSS,
+        })
           if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }
@@ -864,7 +876,7 @@ export class Chat extends plugin {
       if (ctx.isGroup && ctx.groupId && rt.kv) {
         rt.kv.set(`perception:last_active:${ctx.groupId}`, { at: Date.now() }).catch(() => {})
       }
-      devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, body: body || '', turns, stopReason }, traceId)
+      devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, body: body || '', turns, stopReason }, traceId, ctx.devScope)
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
       await this.e.reply(redactSecrets(`失败：${e?.message || e}`))
@@ -900,6 +912,55 @@ export class Chat extends plugin {
     const ctx = ctxOf(this.e)
     const conv = await rt.session.createConversation(ctx.scopeUserId, ctx.groupId)
     await this.e.reply(`已新建对话 #${conv.id}（${conv.title}），后续消息在此对话中继续`)
+    return true
+  }
+
+  // —— 错误上报：把该用户最近 10 个会话的 dev 日志打包发给主人私信 ——
+  async reportBug() {
+    const desc = this.e.msg?.match(/^#上报错误(?:\s+)?([\s\S]+)?$/)?.[1]?.trim() || ''
+    let rt
+    try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const ctx = ctxOf(this.e)
+    const masters = Config.get().agent?.masters || []
+    if (!masters.length) { await this.e.reply('⚠️ 未配置 agent.masters，无人接收上报。'); return true }
+    // 最近 10 个会话（listConversations 默认按 id 升序，这里按 updatedAt 降序取最近）
+    const list = (await rt.session.listConversations(ctx.scopeUserId, ctx.groupId))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 10)
+    const c = Config.get().agent?.devLog
+    const devDir = c?.dir ? path.resolve(c.dir) : Config.path.logs
+    const gid = ctx.groupId || 'private', uid = ctx.scopeUserId
+    const collected = []
+    for (const conv of list) {
+      const prefix = `${gid}-${uid}-${conv.id}-`
+      let files = []
+      try { files = fs.readdirSync(devDir).filter((f) => f.startsWith(prefix) && f.endsWith('.log')) } catch { /* noop */ }
+      for (const f of files) collected.push({ conv, file: f })
+    }
+    if (!collected.length) { await this.e.reply('未找到你的会话日志（可能尚未触发过 AI 或日志已关闭）。'); return true }
+    // 合并成单个 .log 文本（零新依赖，必成功）；每段前加分隔头便于主人定位
+    const ts = new Date()
+    const p2 = (n) => String(n).padStart(2, '0')
+    const stamp = `${ts.getFullYear()}${p2(ts.getMonth() + 1)}${p2(ts.getDate())}-${p2(ts.getHours())}${p2(ts.getMinutes())}`
+    const bundlePath = path.join(Config.path.temp, `agents-bug-${uid}-${stamp}.log`)
+    let header = `# agents-plugin 错误上报\n# 用户：${ctx.userId}（群：${ctx.groupId || '私聊'}）\n# 描述：${desc || '(无)'}\n# 时间：${ts.toLocaleString('zh-CN')}\n# 会话数：${collected.length}\n`
+    let body = ''
+    for (const { conv, file } of collected) {
+      body += `\n===== 会话 #${conv.id} ${conv.title || ''} | createdAt ${conv.createdAt} | updatedAt ${conv.updatedAt} | file ${file} =====\n`
+      try { body += fs.readFileSync(path.join(devDir, file), 'utf8') } catch (e) { body += `(读取失败: ${e?.message})\n` }
+    }
+    try { fs.mkdirSync(Config.path.temp, { recursive: true }); fs.writeFileSync(bundlePath, header + body) }
+    catch (e) { await this.e.reply(`打包失败：${e?.message || e}`); return true }
+    // 发主人私信
+    const bot = (typeof Bot !== 'undefined' && Bot) || null
+    let okCnt = 0
+    for (const mid of masters) {
+      try {
+        await bot?.pickFriend?.(mid)?.sendMsg(`🐛 用户上报错误\n用户：${ctx.userId}（群：${ctx.groupId || '私聊'}）\n描述：${desc || '(无)'}\n会话数：${collected.length}\n时间：${ts.toLocaleString('zh-CN')}`)
+        await bot?.pickFriend?.(mid)?.sendMsg(toFileSegment(bundlePath, `上报日志-${uid}-${stamp}.log`))
+        okCnt++
+      } catch (e) { Log.warn('[reportBug] 发送 master 失败', mid, e?.message || e) }
+    }
+    await this.e.reply(`✅ 已上报给 ${okCnt}/${masters.length} 位 master（含最近 ${collected.length} 个会话日志）`)
     return true
   }
 

@@ -56,12 +56,13 @@ export async function screenshot(name, html) {
  * 把一段文本（markdown）渲染成回复图片（segment.image），失败返回 null。
  * markdown→HTML 用 marked+highlight.js（依赖缺失时自动降级为简易渲染）；截图经 Yunzai 渲染器。
  */
-export async function renderReplyImage(content, { scale = 2 } = {}) {
+export async function renderReplyImage(content, { scale = 3, footer, extraCss } = {}) {
+  const sc = Math.min(Math.max(Number(scale) || 3, 1), 4) // clamp [1,4]，防 Chromium OOM
   try {
     const bodyHtml = await inlineImages(await mdToHtml(content)) // 远程图片下载转 base64 内联（防盗链+可靠），见 model/render/inline-images.js
-    const html = buildHtml({ bodyHtml })
-    // 主路径：独立 puppeteer 高清渲染（dsf 2 + JPEG q95，清晰度远超 Yunzai dsf 1）
-    let img = await renderHighQuality(html, { scale })
+    const html = buildHtml({ bodyHtml, ...(footer ? { footer } : {}), ...(extraCss ? { extraCss } : {}) })
+    // 主路径：独立 puppeteer 高清渲染（dsf + JPEG q95，清晰度远超 Yunzai dsf 1）
+    let img = await renderHighQuality(html, { scale: sc })
     if (img) return img
     // 降级 1：Yunzai 渲染器（dsf 1，但总比文本好）。独立 puppeteer 缺包是部署常态，降级属正常兜底，用 debug 不刷屏
     Log.debug('[render] 独立浏览器渲染失败，降级 Yunzai 渲染器…')
@@ -84,7 +85,7 @@ export async function renderReplyImage(content, { scale = 2 } = {}) {
  * setViewport deviceScaleFactor=N → 物理像素 N 倍 → 清晰度翻倍。
  * 返回 segment.image（base64），失败 null。
  */
-async function renderHighQuality(html, { scale = 2, width = 800, imgType = 'jpeg', quality = 95 } = {}) {
+async function renderHighQuality(html, { scale = 3, width = 800, imgType = 'jpeg', quality = 95 } = {}) {
   const buff = await withPage(html, async (page) => {
     await page.setViewport({ width, height: 1200, deviceScaleFactor: scale })
     await page.waitForSelector('#container', { timeout: 8000 }).catch(() => {})
