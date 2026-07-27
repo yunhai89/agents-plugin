@@ -77,12 +77,15 @@ export async function runShell(command, { cwd, timeout = 60, maxOutput = 8000, t
 
 /** 默认安全黑名单（即使主人确认也拦截）；可在 config.terminal.blocklist 覆盖/追加 */
 export const DEFAULT_BLOCKLIST = [
-  'rm\\s+-rf?\\s+(/|\\*|~)(\\s|$)', // rm -rf / 根目录
+  'rm\\s+(-[a-z]*r[a-z]*f|[a-z]*-r[a-z]*f)', // rm -rf / rm -fr / rm -rfv 等（拦任何 rm 带 r+f flags，不管目标路径/通配符）
+  'rm\\s+.*-rf', // 兜底：rm xxx -rf（flags 在后面）
   'mkfs\\.?[a-z0-9]*\\s+/dev/', // 格式化设备
   'dd\\s+.*of=/dev/', // dd 写设备
   ':\\(\\)\\s*\\{.*\\}\\s*;\\s*:', // fork bomb
   'shutdown|reboot|halt|poweroff', // 关机重启
   'chmod\\s+-R?\\s*000\\s+/', // 去除根权限
+  '>/dev/sda', // 直接写设备
+  'mv\\s+/.+\\s+/dev/null', // mv 到 /dev/null
 ]
 
 /**
