@@ -1,15 +1,22 @@
 /**
  * 工具包自动加载器 —— TRSS-Yunzai apps 风格。
  *
- * 扫描目录下所有 .js 文件，按导出形态归一为工具包，再拍平为工具数组。
- * 每个文件可导出（任一）：
- *   - export default defineToolPack({...})      → 工具包（推荐）
- *   - export default [tool1, tool2]             → 工具数组（匿名包）
- *   - export default tool                       → 单个工具
- *   - export default function(ctx){ return [...] } → 工厂（按 ctx 动态生成）
- *   - export const pack / tools                 → 命名导出同上
+ * 扫描目录下的顶层 .js/.mjs 文件 **和子目录**，按导出形态归一为工具包，再拍平为工具数组。
  *
- * 加载失败的单个文件不中断整体加载（记日志后跳过），与 Yunzai 插件加载一致。
+ * 两种形态：
+ *   1) 单文件：tools/foo.js（简单工具）—— 导出同下。
+ *   2) 目录型：tools/foo/（复杂工具，类似云崽插件包）—— 入口 index.js（或同名 foo.js），
+ *      其余 .js（sign.js / api.js / util.js 等）由入口 import，便于拆分签名/请求等复杂逻辑。
+ *      例：QQ音乐工具 qqmusic/ → index.js(import sign.js,api.js) + sign.js + api.js
+ *
+ * 每个入口（文件或目录的 index）可导出（任一）：
+ *   - export default defineToolPack({...})         → 工具包（推荐）
+ *   - export default [tool1, tool2]                → 工具数组（匿名包）
+ *   - export default tool                          → 单个工具
+ *   - export default function(ctx){ return [...] } → 工厂（按 ctx 动态生成）
+ *   - export const pack / tools                    → 命名导出同上
+ *
+ * 加载失败的单个文件/目录不中断整体加载（记日志后跳过），与 Yunzai 插件加载一致。
  */
 
 import fs from 'node:fs'
@@ -47,10 +54,11 @@ export async function loadToolPacks(dir, { ctx = {}, logger, ext = ['.js', '.mjs
   const packs = []
   const tools = []
   const errors = []
-  let files = []
+  let entries = []
   try {
-    files = fs.readdirSync(dir, { withFileTypes: true })
-      .filter((f) => f.isFile() && ext.includes(path.extname(f.name)))
+    // 顶层 .js/.mjs 文件 + 子目录（目录型工具包：index.js 入口 + 辅助文件，支持复杂逻辑拆分）
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((f) => (f.isFile() && ext.includes(path.extname(f.name))) || f.isDirectory())
       .map((f) => f.name)
       .sort()
   } catch (e) {
@@ -58,11 +66,22 @@ export async function loadToolPacks(dir, { ctx = {}, logger, ext = ['.js', '.mjs
     return { packs, tools, errors }
   }
 
-  for (const name of files) {
+  for (const name of entries) {
     const full = path.resolve(dir, name)
+    // 目录型：找入口（index.js / index.mjs / 同名 .js），辅助文件由入口 import
+    let entry = full
+    let packName = path.basename(name, path.extname(name))
     try {
-      const mod = await import(pathToFileURL(full).href)
-      const pack = asPack(path.basename(name, path.extname(name)), mod, ctx)
+      if (fs.statSync(full).isDirectory()) {
+        const found = ext.flatMap((e) => [path.join(full, `index${e}`), path.join(full, `${name}${e}`)]).find((p) => fs.existsSync(p))
+        if (!found) { errors.push({ file: name, error: '目录缺少入口（index.js 或 同名.js）' }); log('warn', `[toolkit] 跳过目录 ${name}：无入口文件`); continue }
+        entry = found
+        packName = name
+      }
+    } catch { /* noop */ }
+    try {
+      const mod = await import(pathToFileURL(entry).href)
+      const pack = asPack(packName, mod, ctx)
       const resolved = pack.resolve(ctx)
       for (const t of resolved) {
         try {
