@@ -45,15 +45,19 @@
 | 能力 | 说明 | 状态 |
 | --- | --- | --- |
 | 💬 多模型对话 | OpenAI / Anthropic 双协议，接 DeepSeek / Kimi / MiMo / 通义 / 智谱 / Gemini 等 | ✅ 稳定 |
-| 🖼️ 图片渲染回复 | markdown → 精美浅色图片（完整语法 + 代码高亮），失败退文本 | ✅ 稳定 |
+| 🖼️ 图片渲染回复 | markdown → 精美**暗色卡片**图片（完整语法 + 代码高亮 + 底部会话/对话id），失败退文本 | ✅ 稳定 |
 | 🔧 工具调用 | ReAct 内核、并行调用、RBAC + 主人审批、工具开发 SDK | ✅ 稳定 |
 | 🧠 长期记忆 | MEMORY.md/USER.md 人可编辑 + `memory_search` 主动召回（参考 OpenClaw） | ✅ 稳定 |
 | 🎭 人设系统 | 内置 6 角色 + 自建，替换身份层不缩水工具/记忆 | ✅ 稳定 |
 | 🖼️ 多模态识图 | 视觉子模型（主模型无视觉时图转文） | ✅ 稳定 |
 | 🔌 MCP | 完整 MCP 客户端（stdio / HTTP）、多服务端、按工具 RBAC | ✅ 稳定 |
 | 👥 群聊工具 | 群信息 / 群管理 / 米游社搜索 | ✅ 稳定 |
-| 💻 终端执行 | shell 执行（allowlist 免审 + 黑名单 + 主人审批，默认关，**高危**） | ⚠️ 高危可选 |
+| 💻 终端执行 | **Docker 沙盒**执行（即焚容器，默认无网+只读根，allowlist 免审 + 黑名单 + 主人审批） | ⚠️ 高危可选 |
 | 🎭 表情包 | LLM 自主在回复内嵌表情包（图片模式内嵌进图 / 文本混排，频率受控） | ❌ 暂不可用（官方仓库未就绪） |
+| 💬 私聊对话 | 私聊任何消息直接触发（不需 #ai/@），独立会话与记忆 | ✅ 稳定 |
+| 🌐 代理访问 | HTTP/SOCKS 代理（国内服务器访问 GPT/Gemini 等海外 LLM） | ✅ 稳定 |
+| 🔁 回退模型 | 主模型失败自动依次尝试 `fallbackModels`（同 provider） | ✅ 稳定 |
+| 📂 日志分文件 | 按会话分文件 + 图片底部会话/对话id + `#上报错误` 打包发主人 | ✅ 稳定 |
 | 🔍 统一搜索 | Tavily/Exa/Perplexity/Brave → SearXNG → DDG 兜底 | 🧪 早期 |
 | 📚 深度研究 | `#研究` 五阶段管线（规划→检索→综合→引用→评估） | 🧪 早期 |
 
@@ -384,12 +388,46 @@ mcp:
 
 > **⚠️ 高危**：见上方「安全声明」。`terminal` 默认关闭，需 `agent.terminal.enable: true` **单独开启**；开启即视为你知晓风险并自担后果。
 
-`terminal` 工具让 Agent 在主机执行 shell 命令。安全是纵深防御（参考 OpenClaw）：
+`terminal` 工具让 Agent 在 **Docker 沙盒**执行 shell 命令（即焚容器：`--network none` + `--read-only` + `--tmpfs` + `--cap-drop=ALL`，env 不泄漏 apiKey/proxy，主机零暴露）。之上是纵深防御（参考 OpenClaw）：
 
 - **allowlist 自动放行**：只读安全命令（`ls`/`cat`/`grep`/`git status`/`npm list`/`node --version` 等，见 `terminal.allowlist`）**免审批直接执行**；含重定向(`>`)/命令替换/写操作的命令不自动放行。
 - **审批门**：未知命令 / 写操作 → 主人收到 DM（含命令预览 + 风险提示：⚠️写入/🌐网络/🔐提权/📦安装），`#确认 <id>` / `#拒绝 <id>`，超时自拒。每次动作一次性审批。
 - **黑名单**：灾难性命令（`rm -rf /` / `mkfs` / `dd of=/dev/` / 关机重启 等）即使已确认也硬拦。
 - 仅主人可用；`terminal.allowlist` 非空则替换默认只读集，`terminal.blocklist` 追加禁令。
+- **沙盒配置**（`agent.terminal`）：`image`（镜像名）、`network`（`none` 无网 / `auto` 检测 pip/curl 等自动开网 / `host` 始终有网）、`mounts`（主机目录挂载，默认空=不挂最安全）。
+
+### 🐳 沙盒镜像（archlinux）安装
+
+terminal 命令在 Docker 即焚容器里跑，需要一个 Linux 镜像（默认 `archlinux`，自带 pacman 全工具链）。先拉镜像：
+
+```bash
+docker pull archlinux:latest
+# 国内拉不动（docker.io 被墙）用镜像源：
+docker pull docker.m.daocloud.io/library/archlinux:latest
+# 打个短名标签，config 里就能填 archlinux:latest：
+docker tag docker.m.daocloud.io/library/archlinux:latest archlinux:latest
+```
+
+> 换其他镜像也行（alpine/ubuntu/自定义），在 `agent.terminal.image` 填对应镜像名即可。未装 docker 或未拉镜像，terminal 会报错（不降级主机执行，强制沙盒）。
+
+### 🔍 SearXNG（自建免费搜索后端）安装
+
+搜索（`web_search`/`#研究`）若无 Tavily/Exa 等 key，可自建 SearXNG（免费、无 key、隐私）：
+
+```bash
+docker run -d --name searxng --restart=always -p 8080:8080 \
+  -e SEARXNG_BASE_URL=http://localhost:8080 \
+  docker.m.daocloud.io/searxng/searxng:latest
+```
+
+配置里填：
+
+```yaml
+search:
+  searxng: { url: "http://localhost:8080" }
+```
+
+> 生产建议给 SearXNG 加 reverse proxy + auth（见 [SearXNG 文档](https://docs.searxng.org)）。插件按其 JSON API 调用，无需额外适配。
 
 ---
 
