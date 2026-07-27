@@ -69,7 +69,7 @@ export function formatHistory(msgs, currentE, cap = 20) {
 function selfStatus(runtime, cfg) {
   const lines = ['【自我状态】']
   // 工具清单（排除编排用的 delegate__ 委派工具）
-  const names = (runtime?.agent?.tools?.names?.() || []).filter((n) => !n.startsWith('delegate__'))
+  const names = (runtime?.tools?.names?.() || runtime?.agent?.tools?.names?.() || []).filter((n) => !n.startsWith('delegate__'))
   if (names.length) lines.push(`- 可用工具：${names.join('、')}`)
 
   // 终端执行能力：以 terminal 工具是否注册为准（显式告知，避免模型误判"没有能力"）

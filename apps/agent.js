@@ -526,7 +526,7 @@ async function buildRuntime() {
     }
   }
 
-  return { agentConfig, makeAgent, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
+  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
 }
 
 async function getRuntime() {
