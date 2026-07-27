@@ -203,3 +203,46 @@ tbody tr:nth-child(even) { background: #161b22; }
 hr { border-top-color: #30363d; }
 .head { border-bottom-color: #21262d; } .head .title { color: #e6edf3; } .head .sub { color: #6e7681; }
 `
+
+/** 微信聊天界面样式（renderReplyImage 传 chat 参数时启用，覆盖卡片为聊天排版） */
+export const CHAT_CSS = `
+#container.chat { background: #ededed; border: 0; border-radius: 0; box-shadow: none; padding: 0; color: #333; width: 720px; font-size: 15px; line-height: 1.6; }
+.chat-head { padding: 12px 16px; text-align: center; color: #555; font-size: 13px; border-bottom: 1px solid #dcdcdc; }
+.chat-body { padding: 18px 14px; display: flex; flex-direction: column; gap: 20px; }
+.msg { display: flex; align-items: flex-start; gap: 8px; }
+.msg.user { flex-direction: row-reverse; }
+.msg .avatar { width: 40px; height: 40px; border-radius: 4px; flex-shrink: 0; background: #ddd; object-fit: cover; }
+.msg .bubble { max-width: 75%; padding: 9px 12px; border-radius: 4px; word-break: break-word; box-sizing: border-box; }
+.user-b { background: #95ec69; color: #000; }  /* 微信绿气泡 */
+.ai-content { display: flex; flex-direction: column; gap: 4px; max-width: 82%; }
+.ai-name { font-size: 12px; color: #888; margin-left: 4px; }
+.ai-b { background: #fff; color: #333; border: 1px solid #e5e5e5; }  /* AI 白气泡 */
+.ai-b pre { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 8px; }
+.ai-b :not(pre)>code { background: #f0f0f0; color: #c7254e; }
+.ai-b h1,.ai-b h2,.ai-b h3 { color: #24292e; }
+.chat-foot { padding: 8px 16px; text-align: right; color: #999; font-size: 12px; border-top: 1px solid #dcdcdc; }
+`
+
+/** 转义 */
+function _esc(s){return String(s ?? '').replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+/**
+ * 构建微信聊天界面 HTML（renderReplyImage 传 chat 参数时用）。
+ * @param {object} p { bodyHtml(已渲染的 AI 回复), chat={userText,userName,userAvatar,aiName,aiAvatar,groupName,groupId,tokens} }
+ */
+export function buildChatHtml({ bodyHtml = '', chat = {} } = {}) {
+  const { userText = '', userAvatar = '', aiName = '', aiAvatar = '', groupName = '', groupId = '', tokens } = chat
+  const head = groupName ? `${_esc(groupName)}（${_esc(groupId)}）` : '私聊'
+  const userBubble = _esc(userText).replace(/\n/g, '<br>')
+  return `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>${THEME_CSS}${CHAT_CSS}</style></head>
+<body><div id="container" class="chat">
+<div class="chat-head">${head}</div>
+<div class="chat-body">
+<div class="msg user"><div class="bubble user-b">${userBubble}</div><img class="avatar" src="${_esc(userAvatar)}" referrerpolicy="no-referrer"></div>
+<div class="msg ai"><img class="avatar" src="${_esc(aiAvatar)}" referrerpolicy="no-referrer"><div class="ai-content"><div class="ai-name">${_esc(aiName)}</div><div class="bubble ai-b">${bodyHtml}</div></div></div>
+</div>
+${tokens != null ? `<div class="chat-foot">本次回复 tokens: ${Number(tokens) || 0}</div>` : ''}
+</div></body></html>`
+}

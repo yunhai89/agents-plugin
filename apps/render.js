@@ -10,6 +10,7 @@ import path from 'node:path'
 import Log from '../utils/Log.js'
 import Config from '../utils/Config.js'
 import { buildHtml, mdToHtml } from '../model/render/index.js'
+import { buildChatHtml } from '../model/render/theme.js'
 import { inlineImages } from '../model/render/inline-images.js'
 
 let _shotSeq = 0
@@ -56,11 +57,19 @@ export async function screenshot(name, html) {
  * 把一段文本（markdown）渲染成回复图片（segment.image），失败返回 null。
  * markdown→HTML 用 marked+highlight.js（依赖缺失时自动降级为简易渲染）；截图经 Yunzai 渲染器。
  */
-export async function renderReplyImage(content, { scale = 3, footer, extraCss } = {}) {
+export async function renderReplyImage(content, { scale = 3, footer, extraCss, chat } = {}) {
   const sc = Math.min(Math.max(Number(scale) || 3, 1), 4) // clamp [1,4]，防 Chromium OOM
   try {
     const bodyHtml = await inlineImages(await mdToHtml(content)) // 远程图片下载转 base64 内联（防盗链+可靠），见 model/render/inline-images.js
-    const html = buildHtml({ bodyHtml, ...(footer ? { footer } : {}), ...(extraCss ? { extraCss } : {}) })
+    // 聊天模式：头像 base64 内联（防 puppeteer 加载远程失败/防盗链）
+    let chatResolved = chat
+    if (chat) {
+      const fa = async (u) => { if (!u) return ''; try { const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }); const b = Buffer.from(await r.arrayBuffer()); return `data:image/jpeg;base64,${b.toString('base64')}` } catch { return String(u) } }
+      chatResolved = { ...chat, userAvatar: await fa(chat.userAvatar), aiAvatar: await fa(chat.aiAvatar) }
+    }
+    const html = chatResolved
+      ? buildChatHtml({ bodyHtml, chat: chatResolved })
+      : buildHtml({ bodyHtml, ...(footer ? { footer } : {}), ...(extraCss ? { extraCss } : {}) })
     // 主路径：独立 puppeteer 高清渲染（dsf + JPEG q95，清晰度远超 Yunzai dsf 1）
     let img = await renderHighQuality(html, { scale: sc })
     if (img) return img

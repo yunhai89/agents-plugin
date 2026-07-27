@@ -914,6 +914,16 @@ export class Chat extends plugin {
           scale: cfg.reply?.renderScale ?? 3,
           footer: `会话 #${ctx.conversationId} · 对话 ${traceId.slice(0, 8)}`,
           extraCss: REPLY_CSS,
+          chat: {
+            userText: text,
+            userName: this.e.sender?.card || this.e.sender?.nickname || ctx.userId,
+            userAvatar: `https://q1.qlogo.cn/g?b=qq&nk=${ctx.userId}&s=100`,
+            aiName: (typeof Bot !== 'undefined' && (Bot.nickname || Bot.name)) || 'AI',
+            aiAvatar: `https://q1.qlogo.cn/g?b=qq&nk=${(typeof Bot !== 'undefined' && (Bot.uin || Bot.uins?.[0])) || this.e.self_id || ''}&s=100`,
+            groupName: ctx.isGroup ? (this.e.group_name || this.e.groupInfo?.group_name || '') : '',
+            groupId: ctx.groupId || '',
+            tokens: usage?.total_tokens ?? (usage ? ((usage.prompt_tokens ?? usage.input_tokens ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? 0)) : null),
+          },
         })
           if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
