@@ -35,14 +35,14 @@ export const getAiCharactersTool = defineTool({
 /** ai_tts：文字转 AI 语音（返回语音文件信息，不直接发送） */
 export const aiTtsTool = defineTool({
   name: 'ai_tts',
-  description: '把文字转成 AI 语音，返回语音文件信息（不直接发送；如需直接发到群里用 send_group_ai_record）。character 角色可用 get_ai_characters 查询。',
+  description: '把文字转成 AI 语音，返回语音文件信息（不直接发送；如需直接发到群里用 send_group_ai_record）。character 必填：用 get_ai_characters 查询可用角色 id。',
   category: 'query',
   meta: { summary: '文字转AI语音' },
   parameters: param.object({
     text: param.str('要转语音的文字'),
-    character: param.str('角色 id（可选，默认）'),
+    character: param.str('角色 id（必填，用 get_ai_characters 查询）'),
     groupId: param.str('群号（可选）'),
-  }, ['text']),
+  }, ['text', 'character']),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId（AI 语音需群上下文）' }
@@ -58,14 +58,14 @@ export const aiTtsTool = defineTool({
 /** send_group_ai_record：群内发送 AI 语音 */
 export const sendGroupAiRecordTool = defineTool({
   name: 'send_group_ai_record',
-  description: '把文字合成 AI 语音并直接发到当前群（message 写操作）。character 可选，默认角色。',
+  description: '把文字合成 AI 语音并直接发到当前群（message 写操作）。character 必填：用 get_ai_characters 查询可用角色 id。',
   category: 'message',
   meta: { summary: '群内发AI语音', interactive: true },
   parameters: param.object({
     text: param.str('要转语音并发送的文字'),
-    character: param.str('角色 id（可选）'),
+    character: param.str('角色 id（必填，用 get_ai_characters 查询）'),
     groupId: param.str('群号（可选，默认当前群）'),
-  }, ['text']),
+  }, ['text', 'character']),
   async execute(p, ctx) {
     const gid = needGid(ctx, p.groupId)
     if (!gid) return { error: '当前非群聊且未指定 groupId' }
