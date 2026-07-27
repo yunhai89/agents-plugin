@@ -210,7 +210,7 @@ export const CHAT_CSS = `
 .chat-head { padding: 12px 16px; text-align: center; color: #555; font-size: 13px; border-bottom: 1px solid #dcdcdc; }
 .chat-body { padding: 18px 14px; display: flex; flex-direction: column; gap: 20px; }
 .msg { display: flex; align-items: flex-start; gap: 8px; }
-.msg.user { flex-direction: row-reverse; }
+.msg.user { justify-content: flex-end; }
 .msg .avatar { width: 40px; height: 40px; border-radius: 4px; flex-shrink: 0; background: #ddd; object-fit: cover; }
 .msg .bubble { max-width: 75%; padding: 9px 12px; border-radius: 4px; word-break: break-word; box-sizing: border-box; }
 .user-b { background: #95ec69; color: #000; }  /* 微信绿气泡 */
