@@ -220,9 +220,13 @@ export class Agent {
         usage: result.usage || null, ms: __ms,
       }, taskId, ctx?.devScope)
 
+      // 防 API 报错："assistant message content or tool_calls must be set"
+      // deepseek 等模型偶尔返回空 content + 无 tool_calls（如纯 thinking 无正文），
+      // 空消息被追加到历史后，下次 run 读历史时 API 拒绝。给占位避免。
+      const __emptyAssistant = !result.content && !result.toolCalls?.length
       const assistantMsg = {
         role: 'assistant',
-        content: result.content || null,
+        content: result.content || (__emptyAssistant ? '(模型本轮未输出正文)' : null),
         // 默认不回灌 reasoning（keepReasoning=false），避免隐藏 token 持续吃 context
         ...((this.keepReasoning && result.reasoning) ? { reasoning: result.reasoning } : {}),
       }
