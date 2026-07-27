@@ -959,6 +959,7 @@ export class Chat extends plugin {
       devLog('reply', { mode: replyMode, delivered, replyLen: (body || '').length, body: body || '', turns, stopReason }, traceId, ctx.devScope)
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
+      devLog('error', { error: e?.message || String(e), stack: e?.stack || null, input: (text || '').slice(0, 200), model: cfg.model, turns: 'unknown' }, traceId, ctx?.devScope)
       await this.e.reply(redactSecrets(`失败：${e?.message || e}`))
     }
     return true
