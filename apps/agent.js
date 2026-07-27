@@ -909,8 +909,16 @@ export class Chat extends plugin {
       let delivered = false
       if (replyMode === 'image' && body) {
         try {
-          const sc = acceptMap ? rt.sticker.applyImage(body, acceptMap) : body
-          const img = await renderReplyImage(sc, {
+          // 拆 sticker：正文剥标记（无图，applyImage 空 map）+ 图独立成气泡（stickerImgs）
+          let stickerImgs = []
+          let cleanBody = body
+          if (acceptMap && acceptMap.size) {
+            try {
+              cleanBody = rt.sticker.applyImage(body, new Map())
+              stickerImgs = [...acceptMap.values()].map((e) => rt.sticker._imgDataUri(e.abs || e.path)).filter(Boolean)
+            } catch { cleanBody = body }
+          }
+          const img = await renderReplyImage(cleanBody, {
           scale: cfg.reply?.renderScale ?? 3,
           footer: `会话 #${ctx.conversationId} · 对话 ${traceId.slice(0, 8)}`,
           extraCss: REPLY_CSS,
@@ -923,6 +931,7 @@ export class Chat extends plugin {
             groupName: ctx.isGroup ? (this.e.group_name || this.e.groupInfo?.group_name || '') : '',
             groupId: ctx.groupId || '',
             tokens: usage?.total_tokens ?? (usage ? ((usage.prompt_tokens ?? usage.input_tokens ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? 0)) : null),
+            stickerImgs,
           },
         })
           if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
