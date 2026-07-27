@@ -129,9 +129,12 @@ agent:
     model: "whisper-1"     # 模型名
     language: ""            # 语言提示（如 zh/en，留空自动检测）
   terminal:
-    # ⚠️ 高危：shell 可执行任意主机命令，防护（allowlist/黑名单/审批）无法 100% 保证安全。
-    # enable: true 即表示你知晓风险、同意自担后果，与开发者无关。默认关闭。
+    # shell 命令在 Docker 沙盒执行（即焚容器，默认无网+tmpfs，确保主机安全）。详见下方 image/network。
+    # ⚠️ 即便沙盒化，仍属任意命令执行；enable: true 即表示你知晓风险、同意自担后果，与开发者无关。默认关闭。
     enable: false
     maxTimeout: 600
+    image: "archlinux:latest"  # 沙盒镜像（需 docker pull；archlinux 自带 pacman 全工具链）
+    network: "none"            # none(默认无网,最安全) | auto(检测 pip/curl 等需网命令自动开网) | host(始终有网)
+    mounts: []                 # 主机目录挂载到沙盒（如 ["/root/Yunzai/plugins/agents-plugin/data/temp:/data:ro"]）；默认空=不挂(最安全)
     blocklist: []
     allowlist: []          # 只读安全命令正则集（空=用默认 ls/cat/grep/git status 等；命中且无重定向时免审批）

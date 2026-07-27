@@ -189,6 +189,9 @@ export function supportGuoba() {
           component: 'Switch',
         },
         { field: 'agent.terminal.maxTimeout', label: '命令超时上限(秒)', component: 'InputNumber', componentProps: { min: 1, max: 3600 } },
+        { field: 'agent.terminal.image', label: '沙盒镜像', bottomHelpMessage: 'terminal 命令在 Docker 沙盒执行（即焚容器）。镜像名如 archlinux:latest；需先 docker pull', component: 'Input', componentProps: { placeholder: 'archlinux:latest' } },
+        { field: 'agent.terminal.network', label: '沙盒网络', bottomHelpMessage: 'none=默认无网(最安全) | auto=检测 pip/curl 等需网命令自动开网 | host=始终有网', component: 'Select', componentProps: { options: [{ label: 'none 无网(推荐)', value: 'none' }, { label: 'auto 按需开网', value: 'auto' }, { label: 'host 始终有网', value: 'host' }] } },
+        { field: 'agent.terminal.mounts', label: '主机挂载(可选)', bottomHelpMessage: '主机目录挂到沙盒，格式 主机路径:容器路径[:ro]，多个英文逗号分隔；默认空=不挂(最安全)', component: 'Input', componentProps: { placeholder: '留空=不挂' } },
       ],
       // 获取配置数据（前端展示）
       getConfigData() {

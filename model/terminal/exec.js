@@ -13,10 +13,7 @@
  * runShell 为纯执行函数（带超时、输出截断、退出码），terminal 工具在其上加安全门。
  */
 
-import { exec } from 'node:child_process'
-import { promisify } from 'node:util'
-
-const pexec = promisify(exec)
+import { spawn } from 'node:child_process'
 
 function trunc(s, max) {
   const t = String(s == null ? '' : s)
@@ -24,43 +21,58 @@ function trunc(s, max) {
   return t.slice(0, max) + `\n…[已截断，共 ${t.length} 字符]`
 }
 
+/** auto 模式：检测命令是否需要联网（pip/npm/curl/git clone/...） */
+const NET_CMDS = /\b(pip3?|pipx|npm|npx|yarn|pnpm|curl|wget|apt|apt-get|pacman|yay|git\s+clone|go\s+get|cargo|rustup|docker\s+pull|conda|brew)\b/
+function needsNetwork(cmd) { return NET_CMDS.test(String(cmd || '')) }
+
 /**
- * 执行 shell 命令。
+ * 在 Docker 沙盒里执行 shell 命令（即焚容器，默认无网 + tmpfs + 只读根，确保主机安全）。
  * @param {string} command
- * @param {object} opts { cwd?, timeout?(秒,默认60,上限600), maxOutput?(默认8000) }
+ * @param {object} opts { cwd?, timeout?(秒,默认60,上限600), maxOutput?(默认8000), terminal?={image,network,mounts} }
  * @returns {Promise<{ok, exitCode, stdout, stderr, duration, signal?, timedOut?}>}
  */
-export async function runShell(command, { cwd, timeout = 60, maxOutput = 8000 } = {}) {
+export async function runShell(command, { cwd, timeout = 60, maxOutput = 8000, terminal = {} } = {}) {
   const cmd = String(command || '')
   const seconds = Math.min(Math.max(1, Number(timeout) || 60), 600)
   const ms = seconds * 1000
+  const image = terminal.image || 'archlinux:latest'
+  const network = terminal.network || 'none' // none | auto | host
+  const mounts = Array.isArray(terminal.mounts) ? terminal.mounts : (terminal.mounts ? String(terminal.mounts).split(',').map((s) => s.trim()).filter(Boolean) : [])
+  const netFlag = network === 'host' ? '--network=host'
+    : (network === 'auto' && needsNetwork(cmd)) ? '--network=host'
+    : '--network=none'
+  const args = ['run', '--rm',
+    netFlag,
+    '--cap-drop=ALL', '--security-opt', 'no-new-privileges',
+    '--read-only', '--tmpfs', '/workspace:rw,size=64m', '--tmpfs', '/tmp:rw,size=64m',
+    ...mounts.flatMap((m) => ['-v', String(m)]),
+    '-w', cwd || '/workspace',
+    image, 'sh', '-c', cmd,
+  ]
   const t0 = Date.now()
-  try {
-    const { stdout, stderr } = await pexec(cmd, {
-      cwd: cwd || undefined,
-      timeout: ms,
-      maxBuffer: 4 * 1024 * 1024,
+  return new Promise((resolve) => {
+    let stdout = '', stderr = ''
+    let timer = null
+    let proc
+    const finish = (r) => { if (timer) clearTimeout(timer); resolve(r) }
+    try {
+      proc = spawn('docker', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      return finish({ ok: false, stderr: trunc(String(e), maxOutput), duration: Date.now() - t0 })
+    }
+    proc.stdout?.on('data', (d) => { stdout += d.toString() })
+    proc.stderr?.on('data', (d) => { stderr += d.toString() })
+    timer = setTimeout(() => {
+      try { proc.kill('SIGKILL') } catch { /* noop */ }
+      finish({ ok: false, exitCode: null, signal: 'SIGKILL', stdout: trunc(stdout, maxOutput), stderr: trunc(stderr, maxOutput), duration: Date.now() - t0, timedOut: true })
+    }, ms)
+    proc.on('error', (e) => {
+      // docker 未装(ENOENT) 等 → 不降级主机执行
+      const missing = /ENOENT|not found|spawn/i.test(e?.message || '')
+      finish({ ok: false, stderr: trunc(stderr + `\n${e?.message || e}` + (missing ? '\ndocker 不可用（terminal 沙盒需 docker，不降级主机执行）' : ''), maxOutput), duration: Date.now() - t0 })
     })
-    return {
-      ok: true,
-      exitCode: 0,
-      stdout: trunc(stdout, maxOutput),
-      stderr: trunc(stderr, maxOutput),
-      duration: Date.now() - t0,
-    }
-  } catch (e) {
-    // exec 在非零退出码/超时时 reject；e 带 stdout/stderr/code/signal
-    const timedOut = e.killed === true || e.signal === 'SIGTERM'
-    return {
-      ok: false,
-      exitCode: typeof e.code === 'number' ? e.code : null,
-      signal: e.signal || null,
-      stdout: trunc(e.stdout || '', maxOutput),
-      stderr: trunc(e.stderr || e.message || String(e), maxOutput),
-      duration: Date.now() - t0,
-      timedOut,
-    }
-  }
+    proc.on('close', (code) => finish({ ok: code === 0, exitCode: code, stdout: trunc(stdout, maxOutput), stderr: trunc(stderr, maxOutput), duration: Date.now() - t0 }))
+  })
 }
 
 /** 默认安全黑名单（即使主人确认也拦截）；可在 config.terminal.blocklist 覆盖/追加 */
@@ -165,6 +177,7 @@ export function makeTerminalTool() {
       const res = await runShell(cmd, {
         cwd: params.cwd || cfg.cwd || undefined,
         timeout: Math.min(Number(params.timeout) || cfg.maxTimeout || 60, cfg.maxTimeout || 600),
+        terminal: { image: cfg.image, network: cfg.network, mounts: cfg.mounts },
       })
       return { command: cmd, ...res }
     },

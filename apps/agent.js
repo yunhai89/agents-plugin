@@ -45,7 +45,7 @@ import { randomUUID } from 'node:crypto'
 import devLog from '../utils/DevLog.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
 import { buildSituationalContext } from '../model/perception.js'
-import { makeTerminalTool, DEFAULT_BLOCKLIST } from '../model/terminal/index.js'
+import { makeTerminalTool, DEFAULT_BLOCKLIST, DEFAULT_ALLOWLIST } from '../model/terminal/index.js'
 import { calcTool } from '../model/calc/index.js'
 import { sendFileTool } from '../model/document/sendfile.js'
 import { readPdfTool } from '../model/document/pdf.js'
@@ -737,11 +737,15 @@ export class Chat extends plugin {
     const caps = detectCapabilities({ protocol, model: cfg.model, caps: cfg.media?.caps })
     const mediaCfg = cfg.media || {}
     ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2 }
-    // terminal 工具运行时配置（黑名单/超时/工作目录）
+    // terminal 工具运行时配置（黑名单/超时/工作目录 + 沙盒 image/network/mounts）
     ctx.terminal = {
       cwd: Config.path.yunzai,
       maxTimeout: cfg.terminal?.maxTimeout || 600,
       blocklist: cfg.terminal?.blocklist || DEFAULT_BLOCKLIST,
+      allowlist: cfg.terminal?.allowlist || DEFAULT_ALLOWLIST,
+      image: cfg.terminal?.image,
+      network: cfg.terminal?.network,
+      mounts: cfg.terminal?.mounts,
     }
     const media = createMediaService({
       bot: ctx.bot, e: this.e, caps, protocol, config: mediaCfg, fetcher: ctx.fetcher,
