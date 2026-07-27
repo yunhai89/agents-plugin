@@ -160,8 +160,17 @@ async function recentHistory({ ctx, e, kv, bot, historyCount }) {
 export async function buildSituationalContext({ ctx, runtime, e, kv, cfg, bot, historyCount = 15, sessionLen } = {}) {
   const parts = []
   parts.push(`【当前时间】${nowStr()}`)
+  // Bot 自身信息（用 Yunzai e.bot/e.self_id 获取，AI 需要知道自己是谁）
+  const b = bot || ctx?.bot || e?.bot
+  const selfId = e?.self_id || ctx?.bot?.uin || b?.uin || ''
+  const botNick = b?.nickname || (typeof Bot !== 'undefined' && Bot.nickname) || ''
+  if (selfId || botNick) parts.push(`【机器人身份】${botNick || 'Bot'}（QQ: ${selfId}）——这是你自己的身份，用户问"你的QQ号/你是谁"时据此回答`)
   if (ctx?.isGroup) parts.push(`【发言者】${roleLabel(ctx)}（${ctx.userId}）。权限：${ctx.isMaster ? '可执行敏感指令' : '普通对话与查询类工具'}`)
   parts.push(selfStatus(runtime, cfg))
+  // 群聊环境提示：引导 AI 主动参考群聊上下文
+  if (ctx?.isGroup && ctx?.groupId) {
+    parts.push(`【群聊环境】你在群 ${ctx.groupId} 中。回答前请参考上方已注入的近期群聊记录；若上下文不足，主动调用 get_chat_history 工具拉取更多——不要等用户要求。`)
+  }
   const hist = await recentHistory({ ctx, e, kv, bot: bot || ctx?.bot, historyCount }).catch(() => null)
   if (hist) {
     parts.push(hist)
