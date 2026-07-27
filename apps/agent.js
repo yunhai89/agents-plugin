@@ -932,7 +932,7 @@ export class Chat extends plugin {
             groupId: ctx.groupId || '',
             model: cfg.model || '',
             tokens: usage?.total_tokens ?? usage?.total ?? (usage ? ((usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? 0)) : null),
-            reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens ?? 0,
+            reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens ?? usage?.raw?.completion_tokens_details?.reasoning_tokens ?? usage?.raw?.reasoning_tokens ?? 0,
             stickerImgs,
           },
         })
