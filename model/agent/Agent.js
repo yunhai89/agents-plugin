@@ -96,9 +96,8 @@ export class Agent {
     this.reflect = config.reflect ?? 'auto'
     this.reflectMaxIterations = config.reflectMaxIterations ?? 1
 
-    this.fallbackModels = config.fallbackModels
-    // 回退模型列表（数组或逗号字符串 → 数组）；主模型失败时依次尝试
-    this._fallbackList = (Array.isArray(config.fallbackModels) ? config.fallbackModels : config.fallbackModels ? String(config.fallbackModels).split(',').map((s) => s.trim()).filter(Boolean) : [])
+    // 回退 provider 列表（每条 {provider, model}，独立 baseURL/apiKey/protocol，可跨厂商）；主模型失败时依次尝试
+    this.fallbackProviders = Array.isArray(config.fallbackProviders) ? config.fallbackProviders : []
     this.messages = []
   }
 
@@ -195,19 +194,19 @@ export class Agent {
       }
 
       const __t0 = Date.now()
-      // 主模型失败时依次尝试回退模型（同 provider 换 model id）
-      const __chatWith = (m) => this.provider.chat({
+      // 主模型失败时依次尝试回退 provider（各自独立 baseURL/apiKey/protocol，可跨厂商）
+      const __chatWith = (prov, m) => prov.chat({
         model: m, messages: this.messages, system,
         tools: toolList.length ? toolList : undefined, tool_choice: this.toolChoice,
         temperature: this.temperature, max_tokens: this.maxTokens, thinking: this.thinking,
         signal, stream: wantStream, onDelta: cb.onDelta, onReasoning: cb.onReasoning,
         ...this._extraRunOpts(opts),
       })
-      const __models = [this.model, ...this._fallbackList]
+      const __tries = [{ provider: this.provider, model: this.model }, ...this.fallbackProviders]
       let result, lastErr
-      for (const m of __models) {
-        try { result = await __chatWith(m); break }
-        catch (e) { lastErr = e; if (__models.length > 1) this.logger('warn', `[fallback] 模型 ${m} 失败，尝试下一个`, e?.message || e) }
+      for (const t of __tries) {
+        try { result = await __chatWith(t.provider, t.model); break }
+        catch (e) { lastErr = e; if (__tries.length > 1) this.logger('warn', `[fallback] 模型 ${t.model} 失败，尝试下一个`, e?.message || e) }
       }
       if (!result) throw lastErr
       const __ms = Date.now() - __t0

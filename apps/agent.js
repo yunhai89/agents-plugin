@@ -340,6 +340,25 @@ async function buildRuntime() {
     ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
 
+  // 回退 provider：每条独立 baseURL/apiKey/protocol（可跨厂商，如主 DeepSeek + 回退 GPT）
+  const fallbackProviders = []
+  const fbList = [...(Array.isArray(cfg.fallbackModels) ? cfg.fallbackModels : [])]
+  if (cfg.fallbackModel && cfg.fallbackApiKey) fbList.push({ model: cfg.fallbackModel, baseURL: cfg.fallbackBaseURL, apiKey: cfg.fallbackApiKey, protocol: cfg.fallbackProtocol }) // 兼容锅巴扁平字段（单回退）
+  for (const fb of fbList) {
+    if (!fb || !fb.model || !fb.apiKey) continue
+    try {
+      const fbp = fb.protocol || 'openai'
+      const fbPreset = fb.preset ? (fbp === 'anthropic' ? anthropicPresets : openaiPresets)[fb.preset] : {}
+      const fp = createProvider({
+        protocol: fbp, ...fbPreset,
+        ...(fb.baseURL ? { baseURL: fb.baseURL } : {}),
+        apiKey: fb.apiKey, model: fb.model,
+        ...(proxyFetch ? { fetch: proxyFetch } : {}),
+      })
+      fallbackProviders.push({ provider: fp, model: fb.model })
+    } catch (e) { Log.warn('[fallback] 回退模型装配失败', fb?.model, e?.message || e) }
+  }
+
   // 一切数据存插件自己目录（Config.path.data 下）；首次运行把旧 TRSS data 目录的数据迁过来
   migratePluginData()
   const memoryDir = Config.path.memories
@@ -446,7 +465,7 @@ async function buildRuntime() {
   const agentConfig = {
     provider,
     model: cfg.model,
-    fallbackModels: cfg.fallbackModels,
+    fallbackProviders,
     tools,
     memory,
     session,

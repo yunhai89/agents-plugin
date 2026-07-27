@@ -12,7 +12,19 @@ agent:
   apiKey: ""               # ★必填：OpenAI 兼容接口的 API Key（DeepSeek/OpenAI/智谱/mimo 等）；留空则插件不初始化
   model: "deepseek-chat"
   utilityModel: ""  # 进度播报等旁路任务用的小模型 id（留空=沿用主模型；填主 provider 支持的小模型 id 可降本）
-  fallbackModels: []  # 回退模型：主模型失败时依次尝试（同 provider 的模型 id 数组，如 [gpt-4o, gemini-pro]）
+  # 回退模型：主模型失败时依次尝试。每条独立 baseURL/apiKey/protocol（可跨厂商）。
+  # 多回退用数组（在此 yaml 配）：例：主 DeepSeek，回退 GPT
+  #   fallbackModels:
+  #     - model: "gpt-4o"
+  #       baseURL: "https://api.openai.com/v1"
+  #       apiKey: "sk-gpt-xxx"
+  #       protocol: "openai"
+  fallbackModels: []
+  # 锅巴面板单回退（扁平字段，方便表单填写；多回退用上面 fallbackModels 数组）
+  fallbackModel: ""        # 回退模型 id（如 gpt-4o）
+  fallbackBaseURL: ""      # 回退 baseURL（如 https://api.openai.com/v1）
+  fallbackApiKey: ""       # 回退 apiKey
+  fallbackProtocol: "openai"  # openai | anthropic
   proxy: ""  # HTTP/SOCKS 代理（如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）；国内服务器访问 GPT/Gemini 等海外 LLM 用，留空=直连
   reasoningFields: []
   maxTurns: 50
