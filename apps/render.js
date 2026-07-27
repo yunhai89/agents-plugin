@@ -73,7 +73,7 @@ export async function renderReplyImage(content, { scale = 3, footer, extraCss, c
         { role: 'ai', html: bodyHtml, avatar: aiAvatar, name: chat.aiName },
         ...((chat.stickerImgs || []).map((u) => ({ role: 'ai', html: `<img style="max-height:140px;display:block" src="${u}">`, avatar: aiAvatar, name: chat.aiName }))),
       ]
-      chatResolved = { messages, head: chat.groupName ? `${chat.groupName}（${chat.groupId}）` : '私聊', tokens: chat.tokens, reasoningTokens: chat.reasoningTokens }
+      chatResolved = { messages, head: chat.groupName ? `${chat.groupName}（${chat.groupId}）` : '私聊', tokens: chat.tokens, reasoningTokens: chat.reasoningTokens, model: chat.model }
     }
     const html = chatResolved
       ? buildChatHtml(chatResolved)

@@ -230,7 +230,7 @@ function _esc(s){return String(s ?? '').replace(/[&<>"]/g,(c)=>({'&':'&amp;','<'
  * 构建微信聊天界面 HTML（renderReplyImage 传 chat 参数时用）。
  * @param {object} p { bodyHtml(已渲染的 AI 回复), chat={userText,userName,userAvatar,aiName,aiAvatar,groupName,groupId,tokens} }
  */
-export function buildChatHtml({ messages = [], head = '', tokens, reasoningTokens } = {}) {
+export function buildChatHtml({ messages = [], head = '', tokens, reasoningTokens, model } = {}) {
   const renderMsg = (m) => {
     const av = m.avatar ? `<img class="avatar" src="${_esc(m.avatar)}" referrerpolicy="no-referrer">` : ''
     if (m.role === 'user') return `<div class="msg user"><div class="bubble user-b">${_esc(m.text || '').replace(/\n/g, '<br>')}</div>${av}</div>`
@@ -242,6 +242,6 @@ export function buildChatHtml({ messages = [], head = '', tokens, reasoningToken
 <body><div id="container" class="chat">
 <div class="chat-head">${_esc(head)}</div>
 <div class="chat-body">${(messages || []).map(renderMsg).join('\n')}</div>
-${tokens != null ? `<div class="chat-foot">本次回复 tokens: ${Number(tokens) || 0}${reasoningTokens ? `（思考: ${Number(reasoningTokens) || 0}）` : ''}</div>` : ''}
+${tokens != null ? `<div class="chat-foot">${model ? `${_esc(model)} · ` : ''}tokens: ${Number(tokens) || 0}${reasoningTokens ? `（思考: ${Number(reasoningTokens) || 0}）` : ''}</div>` : ''}
 </div></body></html>`
 }
