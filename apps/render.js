@@ -65,10 +65,18 @@ export async function renderReplyImage(content, { scale = 3, footer, extraCss, c
     let chatResolved = chat
     if (chat) {
       const fa = async (u) => { if (!u) return ''; try { const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' } }); const b = Buffer.from(await r.arrayBuffer()); return `data:image/jpeg;base64,${b.toString('base64')}` } catch { return String(u) } }
-      chatResolved = { ...chat, userAvatar: await fa(chat.userAvatar), aiAvatar: await fa(chat.aiAvatar) }
+      const userAvatar = await fa(chat.userAvatar)
+      const aiAvatar = await fa(chat.aiAvatar)
+      // 多气泡：用户问 + AI 正文 + 每个表情包独立一条（类似微信多消息）
+      const messages = [
+        { role: 'user', text: chat.userText, avatar: userAvatar },
+        { role: 'ai', html: bodyHtml, avatar: aiAvatar, name: chat.aiName },
+        ...((chat.stickerImgs || []).map((u) => ({ role: 'ai', html: `<img style="max-height:140px;display:block" src="${u}">`, avatar: aiAvatar, name: chat.aiName }))),
+      ]
+      chatResolved = { messages, head: chat.groupName ? `${chat.groupName}（${chat.groupId}）` : '私聊', tokens: chat.tokens }
     }
     const html = chatResolved
-      ? buildChatHtml({ bodyHtml, chat: chatResolved })
+      ? buildChatHtml(chatResolved)
       : buildHtml({ bodyHtml, ...(footer ? { footer } : {}), ...(extraCss ? { extraCss } : {}) })
     // 主路径：独立 puppeteer 高清渲染（dsf + JPEG q95，清晰度远超 Yunzai dsf 1）
     let img = await renderHighQuality(html, { scale: sc })

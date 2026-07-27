@@ -230,19 +230,18 @@ function _esc(s){return String(s ?? '').replace(/[&<>"]/g,(c)=>({'&':'&amp;','<'
  * 构建微信聊天界面 HTML（renderReplyImage 传 chat 参数时用）。
  * @param {object} p { bodyHtml(已渲染的 AI 回复), chat={userText,userName,userAvatar,aiName,aiAvatar,groupName,groupId,tokens} }
  */
-export function buildChatHtml({ bodyHtml = '', chat = {} } = {}) {
-  const { userText = '', userAvatar = '', aiName = '', aiAvatar = '', groupName = '', groupId = '', tokens } = chat
-  const head = groupName ? `${_esc(groupName)}（${_esc(groupId)}）` : '私聊'
-  const userBubble = _esc(userText).replace(/\n/g, '<br>')
+export function buildChatHtml({ messages = [], head = '', tokens } = {}) {
+  const renderMsg = (m) => {
+    const av = m.avatar ? `<img class="avatar" src="${_esc(m.avatar)}" referrerpolicy="no-referrer">` : ''
+    if (m.role === 'user') return `<div class="msg user"><div class="bubble user-b">${_esc(m.text || '').replace(/\n/g, '<br>')}</div>${av}</div>`
+    return `<div class="msg ai">${av}<div class="ai-content">${m.name ? `<div class="ai-name">${_esc(m.name)}</div>` : ''}<div class="bubble ai-b">${m.html || _esc(m.text || '')}</div></div></div>`
+  }
   return `<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>${THEME_CSS}${CHAT_CSS}</style></head>
 <body><div id="container" class="chat">
-<div class="chat-head">${head}</div>
-<div class="chat-body">
-<div class="msg user"><div class="bubble user-b">${userBubble}</div><img class="avatar" src="${_esc(userAvatar)}" referrerpolicy="no-referrer"></div>
-<div class="msg ai"><img class="avatar" src="${_esc(aiAvatar)}" referrerpolicy="no-referrer"><div class="ai-content"><div class="ai-name">${_esc(aiName)}</div><div class="bubble ai-b">${bodyHtml}</div></div></div>
-</div>
+<div class="chat-head">${_esc(head)}</div>
+<div class="chat-body">${(messages || []).map(renderMsg).join('\n')}</div>
 ${tokens != null ? `<div class="chat-foot">本次回复 tokens: ${Number(tokens) || 0}</div>` : ''}
 </div></body></html>`
 }
