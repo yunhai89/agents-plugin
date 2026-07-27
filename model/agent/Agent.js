@@ -158,6 +158,14 @@ export class Agent {
     }
     const sessStart = this.messages.length
 
+    // 清理历史中的空 assistant 消息（之前 bug 可能产生），给占位避免 API 报 "content or tool_calls must be set"
+    this.messages = this.messages.map((m) => {
+      if (m && m.role === 'assistant' && !m.content && !m.tool_calls?.length) {
+        return { ...m, content: '(模型历史空回复，已自动修复)' }
+      }
+      return m
+    })
+
     // 追加 user 消息（保留多模态对象形态，仅替换文本内容）
     this.messages.push(this._buildUserMessage(input, userText))
 
