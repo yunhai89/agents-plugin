@@ -931,6 +931,8 @@ export class Chat extends plugin {
             groupName: ctx.isGroup ? (this.e.group_name || this.e.groupInfo?.group_name || '') : '',
             groupId: ctx.groupId || '',
             model: cfg.model || '',
+            inputTokens: usage?.input ?? usage?.raw?.prompt_tokens ?? usage?.prompt_tokens ?? 0,
+            outputTokens: usage?.output ?? usage?.raw?.completion_tokens ?? usage?.completion_tokens ?? 0,
             tokens: usage?.total_tokens ?? usage?.total ?? (usage ? ((usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? 0) + (usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? 0)) : null),
             reasoningTokens: usage?.completion_tokens_details?.reasoning_tokens ?? usage?.reasoning_tokens ?? usage?.raw?.completion_tokens_details?.reasoning_tokens ?? usage?.raw?.reasoning_tokens ?? 0,
             stickerImgs,

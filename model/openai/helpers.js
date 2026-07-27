@@ -41,9 +41,12 @@ export function toolArgumentsString(toolCall) {
  */
 export function extractReasoning(message, fields = []) {
   if (!message) return null
+  // 先查自定义字段
   for (const f of fields) {
     const v = message?.[f]
     if (v) return v
   }
-  return null
+  // 兜底：deepseek/智通/Moonshot 等常见字段名
+  const fallback = message.reasoning_content || message.reasoning
+  return fallback || null
 }

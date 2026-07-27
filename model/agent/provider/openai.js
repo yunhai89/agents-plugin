@@ -102,11 +102,17 @@ export class OpenAIProvider extends Provider {
       name: tc.function?.name,
       arguments: parseToolArguments(tc),
     }))
+    const reasoning = extractReasoning(message, this.reasoningFields)
+    // content 空 + 无 tool_calls + 有 reasoning：用 reasoning 占位 content（防空消息进历史）
+    let content = message.content ?? ''
+    if (!content && !toolCalls.length && reasoning) {
+      content = reasoning  // thinking 模式下正文空但有思考：用思考内容当正文
+    }
     return {
       role: 'assistant',
-      content: message.content ?? '',
+      content,
       toolCalls,
-      reasoning: extractReasoning(message, this.reasoningFields),
+      reasoning,
       finishReason: choice?.finish_reason ?? null,
       usage: res.usage ?? null,
       rawMessage: message,
