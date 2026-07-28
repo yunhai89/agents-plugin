@@ -44,6 +44,9 @@ import { redactSecrets } from '../model/agent/redact.js'
 import { randomUUID } from 'node:crypto'
 import devLog from '../utils/DevLog.js'
 import { SkillRegistry, loadSkillPack, makeSkillTool } from '../model/skill/index.js'
+import { PromptRegistry, PromptTemplate, regressionGate, evolveTemplate, TEMPLATES } from '../model/prompt/index.js'
+import { TraceStore } from '../model/evolution/trace.js'
+import { SelfReviewer, listPendingSuggestions, removeSuggestion } from '../model/evolution/review.js'
 import { buildSituationalContext } from '../model/perception.js'
 import { makeTerminalTool, DEFAULT_BLOCKLIST, DEFAULT_ALLOWLIST } from '../model/terminal/index.js'
 import { calcTool } from '../model/calc/index.js'
@@ -362,12 +365,30 @@ async function buildRuntime() {
   // 一切数据存插件自己目录（Config.path.data 下）；首次运行把旧 TRSS data 目录的数据迁过来
   migratePluginData()
   const memoryDir = Config.path.memories
-  const memory = new MemoryStore({ dir: memoryDir })
+  const memory = new MemoryStore({
+    dir: memoryDir,
+    limits: cfg.memoryLimits || undefined, // 接通死配置；null 会覆盖默认 → undefined 回落 DEFAULT_LIMITS
+    enabled: cfg.memory?.enable === false ? { memory: false, user: false } : undefined,
+  })
   const personaDir = Config.path.personas
   const personaStore = new PersonaStore({ dir: personaDir })
   const K = getKv()
   const session = new SessionStore({ kv: K })
-  const recall = new RecallStore({ kv: K })
+  // 记忆威胁扫描：写入前检测指令注入（复用入口 guard.checkInput）。threatScan 关闭则不扫
+  const recallScanFn = cfg.memory?.threatScan === false ? null : (text) => {
+    try {
+      const g = checkInput(String(text || ''), { sensitivity: 'medium', action: 'flag' })
+      return !!g.blocked || (typeof g.score === 'number' && g.score >= 0.6)
+    } catch { return false }
+  }
+  const recall = new RecallStore({
+    kv: K,
+    cap: cfg.recall?.cap,
+    extractEvery: cfg.recall?.extractEvery,
+    scanFn: recallScanFn,
+    // embedFn 暂留 null：cfg.recall.embedProvider 填模型 id 后，此处注入 makeEmbedFn(cfg) 即走 cosine 语义召回
+    embedFn: null,
+  })
   // confirmTimeout 配置单位是「秒」，ConfirmStore 用「毫秒」，这里换算（默认 300 秒）
   const confirm = new ConfirmStore({ timeout: (cfg.confirmTimeout || 300) * 1000 })
   const scheduler = await nodeScheduleAdapter()
@@ -462,6 +483,55 @@ async function buildRuntime() {
   const mcp = new McpManager({ registry: tools, logger: Log.tag('mcp'), requestTimeout: cfg.mcp?.requestTimeout })
   mcp.start(cfg.mcp?.servers || {}).catch((e) => Log.error('[mcp] 启动失败', e?.message || e))
 
+  // recall 抽取用的轻量 LLM 通道：复用主 provider、换廉价 model id（utilityModel 降本，留空沿用主模型）
+  // llmExtract 已自拼抽取指令+对话，此处只需做「无脑 chat 通道」（recall.js 兼容 llm.run 与函数两种形态）
+  const recallModel = cfg.recall?.model || cfg.utilityModel || cfg.model
+  const recallLlm = {
+    run: async (prompt) => {
+      try {
+        const res = await provider.chat({ model: recallModel, messages: [{ role: 'user', content: prompt }], stream: false })
+        return { content: res?.content || '' }
+      } catch (e) {
+        Log.warn('[recall] llm 抽取调用失败', e?.message || e)
+        return { content: '' }
+      }
+    },
+  }
+
+  // —— 在线自进化三件套：PromptRegistry（prompt 版本化/回滚）+ TraceStore（数据闭环）+ SelfReviewer（后台自评审）——
+  const promptDir = path.resolve(PLUGIN_ROOT, cfg.evolution?.promptDir || 'data/evolution/prompts')
+  const traceDir = path.resolve(PLUGIN_ROOT, cfg.evolution?.traceDir || 'data/evolution/traces')
+  const suggestionDir = path.resolve(PLUGIN_ROOT, cfg.evolution?.suggestionDir || 'data/evolution/suggestions')
+  const promptRegistry = new PromptRegistry()
+  promptRegistry.registerAll(TEMPLATES)
+  try {
+    if (fs.existsSync(promptDir)) {
+      for (const f of fs.readdirSync(promptDir).filter((x) => x.endsWith('.json'))) {
+        try {
+          const tpl = JSON.parse(fs.readFileSync(path.join(promptDir, f), 'utf8'))
+          if (tpl && tpl.id) promptRegistry.register(new PromptTemplate(tpl))
+        } catch (e) { Log.warn('[prompt] 加载进化产出失败', f, e?.message || e) }
+      }
+      if (promptRegistry.size > 0) Log.info('[evolution] PromptRegistry 已加载进化覆盖')
+    }
+  } catch (e) { Log.warn('[evolution] prompts 目录加载失败', e?.message || e) }
+  let traceStore = null
+  try { traceStore = new TraceStore({ dir: traceDir }) } catch (e) { Log.warn('[evolution] TraceStore 初始化失败', e?.message || e) }
+  const srCfg = cfg.selfReview || {}
+  let selfReview = null
+  if (srCfg.enable !== false) {
+    try {
+      selfReview = new SelfReviewer({
+        provider, model: srCfg.model || cfg.utilityModel || cfg.model,
+        traceStore, memory, skills, suggestionDir,
+        botName: (typeof Bot !== 'undefined' && (Bot.nickname || Bot.name)) || '',
+        every: srCfg.every, autoApplyMemory: srCfg.autoApplyMemory, autoApplyPrompt: srCfg.autoApplyPrompt,
+        dailyBudgetTokens: srCfg.dailyBudgetTokens,
+        logger: Log.tag('selfReview'),
+      })
+    } catch (e) { Log.warn('[evolution] SelfReviewer 初始化失败', e?.message || e) }
+  }
+
   const agentConfig = {
     provider,
     model: cfg.model,
@@ -470,6 +540,8 @@ async function buildRuntime() {
     memory,
     session,
     recall,
+    recallLlm, // 接通：让 recall.js 的 llmExtract 真正触发（覆盖"帮我记/以后都/别忘了"等自然说法）
+    promptRegistry, // 进化版 prompt：_assembleSystem 优先取 registry.get('agent').system
     skills, // 让 Agent 在 system prompt 注入 <available_skills> 目录
     guard: { checkInput, systemHardening },
     guardAction: cfg.guardAction || 'flag',
@@ -526,7 +598,7 @@ async function buildRuntime() {
     }
   }
 
-  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K }
+  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K, promptRegistry, traceStore, selfReview, promptDir, suggestionDir }
 }
 
 async function getRuntime() {
@@ -675,6 +747,12 @@ export class Chat extends plugin {
         { reg: '^#重置人设$', fnc: 'personaReset' },
         { reg: '^#人设$', fnc: 'personaList' },
         { reg: '^#人设\\s+(.+)', fnc: 'personaSwitch' },
+        // —— 在线自进化：审阅 / 采纳 / 拒绝 / 回滚（主人）——
+        { reg: '^#审阅进化$', fnc: 'reviewList', permission: 'master' },
+        { reg: '^#采纳\\s+(.+)', fnc: 'reviewAdopt', permission: 'master' },
+        { reg: '^#拒绝进化\\s+(.+)', fnc: 'reviewReject', permission: 'master' },
+        { reg: '^#回滚\\s+(.+)', fnc: 'promptRollback', permission: 'master' },
+        { reg: '^#进化\\s+prompt\\s+(.+)', fnc: 'evolvePrompt', permission: 'master' },
         // —— 错误上报 ——
         { reg: '^#上报错误(?:\\s+([\\s\\S]+))?$', fnc: 'reportBug' },
         // —— AI 触发（catch-all，最后匹配；@或自定义触发词）——
@@ -895,6 +973,9 @@ export class Chat extends plugin {
           }
         },
       })
+      // —— 在线自进化：采迹（数据闭环）+ 后台自评审触发（全异步、兜底，绝不阻塞回复）——
+      try { rt.traceStore?.record({ scope: ctx.scopeUserId, scopeId: ctx.scopeId, input: __inputText, output: content, turns, usage, stopReason, taskId: traceId }) } catch (e) { Log.warn('[evolution] 采迹失败', e?.message || e) }
+      try { rt.selfReview?.tick(ctx, { input: __inputText, output: content, turns, usage, stopReason }) } catch (e) { Log.warn('[evolution] 自评审触发失败', e?.message || e) }
       const u = usage ? `in:${usage.prompt_tokens ?? usage.input_tokens ?? usage.input ?? '-'}/out:${usage.completion_tokens ?? usage.output_tokens ?? usage.output ?? '-'}` : '-'
       Log.mark('[chat]', `reply turns=${turns} stop=${stopReason} usage=${u} replyLen=${(content || '').length}`)
       // 发送前脱敏：屏蔽 API Key / token 等敏感信息（agent.redactSecrets 默认开；异常不阻塞回复）
@@ -999,6 +1080,102 @@ export class Chat extends plugin {
   }
 
   // —— 错误上报：把该用户最近 10 个会话的 dev 日志打包发给主人私信 ——
+  // ============ 在线自进化：审阅 / 采纳 / 拒绝 / 回滚（主人）============
+  // 后台 SelfReviewer 每 N 轮对话自动产出 suggestion：memory 类（低风险）已自动应用；
+  // skill/prompt 类（高风险）落盘待审，在此人工把关。#进化 prompt 走离线 GEPA（见 evolvePrompt）。
+
+  async reviewList() {
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const ctx = ctxOf(this.e)
+    const list = listPendingSuggestions(rt.suggestionDir, ctx.scopeId)
+    if (!list.length) {
+      const every = Config.get().agent?.selfReview?.every || 20
+      await this.e.reply(`当前无待审的自评审 suggestion。\n（后台每 ${every} 轮对话自动产出；memory 类已自动应用，此处仅列 skill/prompt 及低置信 memory）`)
+      return true
+    }
+    const lines = list.map((s, i) => `${i + 1}. [${s.kind}] conf=${(s.confidence || 0).toFixed(2)} id=${s.id}\n   内容：${String(s.payload || '').slice(0, 100)}\n   理由：${String(s.rationale || '').slice(0, 60)}`)
+    await this.e.reply(`待审 suggestion（共 ${list.length} 条）—— #采纳 <id> 应用 / #拒绝进化 <id> 丢弃：\n\n${lines.join('\n\n')}`)
+    return true
+  }
+
+  async reviewAdopt() {
+    const id = this.e.msg.replace(/^#采纳\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const ctx = ctxOf(this.e)
+    const list = listPendingSuggestions(rt.suggestionDir, ctx.scopeId)
+    const s = list.find((x) => x.id === id)
+    if (!s) { await this.e.reply(`未找到待审 suggestion：${id}`); return true }
+    if (s.kind === 'prompt') {
+      const key = s.target || 'agent'
+      const tpl = rt.promptRegistry.get(key)
+      if (!tpl) { await this.e.reply(`未找到 prompt 模板：${key}`); return true }
+      const oldSystem = tpl.system
+      tpl.system = String(s.payload || '')
+      tpl.addChange(`${tpl.version || '1.0.0'}-evolved`, `自评审采纳：${String(s.rationale || '').slice(0, 50)}`)
+      try { fs.writeFileSync(path.join(rt.promptDir, `${key}.json`), JSON.stringify(tpl.toJSON(), null, 2)) }
+      catch (e) { Log.warn('[evolution] prompt 落盘失败', e?.message || e); await this.e.reply(`⚠️ 已应用但落盘失败：${e?.message || e}`) }
+      removeSuggestion(rt.suggestionDir, ctx.scopeId, s.id)
+      await this.e.reply(`✅ 已采纳 prompt suggestion（${key}），下轮对话生效。可用 #回滚 ${key} 恢复。\n旧版首句：${oldSystem.slice(0, 50)}…`)
+      return true
+    }
+    await this.e.reply(`[${s.kind}] suggestion 需手工处理（skill 请编辑 skills/ 对应文件）：\n${String(s.payload || '').slice(0, 200)}\n\n已记录采纳并移出待审列表。`)
+    removeSuggestion(rt.suggestionDir, ctx.scopeId, s.id)
+    return true
+  }
+
+  async reviewReject() {
+    const id = this.e.msg.replace(/^#拒绝进化\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const ctx = ctxOf(this.e)
+    const ok = removeSuggestion(rt.suggestionDir, ctx.scopeId, id)
+    await this.e.reply(ok ? `已拒绝并删除 suggestion：${id}` : `未找到 suggestion：${id}`)
+    return true
+  }
+
+  async promptRollback() {
+    const key = this.e.msg.replace(/^#回滚\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const file = path.join(rt.promptDir, `${key}.json`)
+    let removed = false
+    try { fs.unlinkSync(file); removed = true } catch { /* 进化产出文件不存在 */ }
+    const builtin = TEMPLATES[key]
+    if (builtin) rt.promptRegistry.register(PromptTemplate.fromTemplateEntry(key, builtin)) // 引用共享：Agent 下轮自动用回默认
+    await this.e.reply(removed ? `✅ 已回滚 ${key} 到内置默认（删除进化产出，下轮生效）` : `${key} 未找到进化产出文件（可能本就是默认版）`)
+    return true
+  }
+
+  async evolvePrompt() {
+    const key = this.e.msg.replace(/^#进化\s+prompt\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    const cfg = Config.get().agent || {}
+    if (!rt.traceStore?.size) { await this.e.reply('TraceStore 暂无对话轨迹，先正常聊几轮再进化（每轮对话自动采迹）。'); return true }
+    if (!TEMPLATES[key] && !rt.promptRegistry.get(key)) { await this.e.reply(`未知 prompt 模板：${key}（可用：${Object.keys(TEMPLATES).join(', ')}）`); return true }
+    await this.e.reply(`⏳ 开始离线进化 prompt「${key}」：采样轨迹 → GEPA 迭代 → LLM-as-judge 评分（约 1-3 分钟、消耗较多 token，期间勿重复触发）…`)
+    try {
+      const samples = rt.traceStore.sample(8)
+      const evalset = samples.map((t, i) => ({ id: String(i), input: String(t.input || '') })).filter((s) => s.input)
+      // LLM-as-judge：无 check 的 case 用主模型评「回复是否正面回应、有无臆测/跑题」(0~1)
+      const judge = {
+        score: async (item, output) => {
+          const p = `用户问题：${String(item.input).slice(0, 200)}\n助手回复：${String(output).slice(0, 300)}\n\n请给回复打分(0~1)：是否正面回应问题、有无明显错误/臆测/跑题。只输出一个小数。`
+          try {
+            const res = await rt.provider.chat({ model: cfg.model, messages: [{ role: 'user', content: p }], stream: false, temperature: 0 })
+            const m = String(res?.content || '').match(/(1(?:\.0+)?|0?\.\d+)/)
+            return { score: m ? Math.max(0, Math.min(1, parseFloat(m[1]))) : 0.5 }
+          } catch { return { score: 0.5 } }
+        },
+      }
+      const result = await evolveTemplate({ templateKey: key, provider: rt.provider, model: cfg.model, evalset, judge, iterations: 2, populationSize: 3, logger: Log.tag('evolve') })
+      if (!result?.best) { await this.e.reply('进化未产出有效版本。'); return true }
+      const tpl = rt.promptRegistry.get(key)
+      const base = tpl ? tpl.toJSON() : { id: key, system: TEMPLATES[key]?.system || '' }
+      const evolved = { ...base, system: result.best.text, version: `${base.version || '1.0.0'}-evolved-${Date.now().toString(36)}` }
+      try { fs.writeFileSync(path.join(rt.promptDir, `${key}.json`), JSON.stringify(evolved, null, 2)) } catch (e) { Log.warn('[evolution] 落盘失败', e?.message || e) }
+      await this.e.reply(`✅ 进化完成：best=${(result.best.score || 0).toFixed(3)}（baseline=${(result.baseline?.score || 0).toFixed(3)}，${result.improved ? '✨已提升' : '未提升'}）\n已写入 data/evolution/prompts/${key}.json（待审）。\n#审阅进化 → #采纳 <id> 应用，#回滚 ${key} 恢复。`)
+    } catch (e) { await this.e.reply(`进化失败：${e?.message || e}`) }
+    return true
+  }
+
   async reportBug() {
     const desc = this.e.msg?.match(/^#上报错误(?:\s+)?([\s\S]+)?$/)?.[1]?.trim() || ''
     let rt

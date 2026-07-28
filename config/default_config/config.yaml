@@ -44,7 +44,26 @@ agent:
     atSender: true          # 群聊回复时艾特发言人（私聊不艾特）
     narrate: true           # 中途播报：模型调工具时附带的思路/进展文本自动转发给用户（OpenClaw 式）
     renderScale: 3          # 回复图片渲染倍率（deviceScaleFactor，3=超清默认；2=高清；1=普通；越大越清晰但越耗内存/体积）
-  memoryLimits:
+  memoryLimits:             # 声明式记忆字符上限 {memory:2200,user:1375}；留空=默认
+  memory:
+    enable: true            # 声明式记忆总开关（关则不注入 MEMORY.md/USER.md）
+    threatScan: true        # 写长期记忆前扫描指令注入（命中降置信+标 suspect，召回屏蔽，#记忆 仍可见原文）
+  recall:
+    cap: 200                # 每用户长期记忆条数上限（超限按价值淘汰，非 FIFO）
+    extractEvery: 10        # 每 N 轮触发一次 LLM 抽取（意图词"记住/叫我"等仍即时触发）
+    model: ""               # 抽取用模型 id（留空=utilityModel→主模型）
+    embedProvider: ""       # 语义召回 embedding 模型 id（留空=关键词 jaccard；填则走 cosine 语义匹配）
+  selfReview:
+    enable: true            # 在线自进化：每 N 轮对话后台异步自我评审，产出改进 suggestion（不阻塞回复）
+    every: 20               # 每 N 轮对话触发一次后台自评审（per-scope 计数）
+    model: ""               # 评审用模型 id（留空=utilityModel→主模型；建议用廉价小模型降本）
+    autoApplyMemory: true   # 记忆类 suggestion 自动应用（有 prev[] 回滚 + 威胁扫描 + 置信度闸兜底）
+    autoApplyPrompt: false  # prompt/技能类落盘待审（#审阅进化 人工把关；强烈建议保持 false）
+    dailyBudgetTokens: 200000  # 自评审日 token 预算（耗尽则只采迹不评审，防成本失控）
+  evolution:
+    traceDir: "data/evolution/traces"           # 对话轨迹存储（供离线 GEPA + 在线自评审消费）
+    promptDir: "data/evolution/prompts"         # 进化产出的 prompt 覆盖（加载时覆盖内置 TEMPLATES）
+    suggestionDir: "data/evolution/suggestions"  # 自评审 suggestion 落盘（按 scope 隔离）
   systemPrompt:
   chatPermission: master
   masterSkipConfirm: false   # 主人发起的任务免确认直执行（高危！仅主人；denylist 仍拦）。开启后主人命令不再 #确认，但会发高危提示

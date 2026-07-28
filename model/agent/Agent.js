@@ -91,6 +91,7 @@ export class Agent {
     this.recall = config.recall || null
     this.recallTopK = config.recallTopK ?? 5
     this.recallLlm = config.recallLlm || null
+    this.promptRegistry = config.promptRegistry || null // 进化版 prompt 注册表：_assembleSystem 优先取 registry.get('agent').system
     this.shortCircuitTools = config.shortCircuitTools || ['clarify']
     // 自我反思/自纠：最终回复交付前自检，发现实质问题则回环修正。off=关 | auto=仅多轮/用工具时(默认) | always=每次都反思
     this.reflect = config.reflect ?? 'auto'
@@ -300,7 +301,18 @@ export class Agent {
     if (this.recall && ctx) {
       const snapshot = this.messages.slice()
       const llm = this.recallLlm || null
-      setImmediate(() => { try { this.recall.extractAndWrite(snapshot, scopeUserId, { llm }) } catch { /* noop */ } })
+      // 异步抽取记忆：可观测（原空 catch 吞错，现记 logger + devLog，便于排查抽取失败/验证触发）
+      setImmediate(async () => {
+        const __t = Date.now()
+        try {
+          await this.recall.extractAndWrite(snapshot, scopeUserId, { llm })
+          this.logger('debug', `[recall] 异步抽取完成 scope=${scopeUserId} msgs=${snapshot.length} ms=${Date.now() - __t}`)
+          this.devLog?.('recall_extract', { scopeUserId, ok: true, msgs: snapshot.length, hasLlm: !!llm, ms: Date.now() - __t }, taskId, ctx?.devScope)
+        } catch (e) {
+          this.logger('warn', '[recall] 抽取失败', e?.message || e)
+          this.devLog?.('recall_extract', { scopeUserId, ok: false, hasLlm: !!llm, error: e?.message || String(e) }, taskId, ctx?.devScope)
+        }
+      })
     }
 
     this.logger('mark', 'run end turns=', turns, 'stop=', stopReason, 'usage=', fmtUsage(usage), 'replyLen=', (lastContent || '').length, `totalMs=${Date.now() - __runStart}`)
@@ -339,7 +351,9 @@ export class Agent {
 
   _assembleSystem(memories, systemPromptOverride, context, scopeId) {
     // 结构化分层（稳定前缀 → 动态后缀）：身份 → 服务准则 → 执行取向 → 工具目录 → 技能 → 记忆 → 情境 → 安全
-    const identity = systemPromptOverride || this.systemPrompt
+    // identity 优先级：人设 override > 进化产出(registry) > config.systemPrompt > 默认 TEMPLATES.agent.system
+    const regIdentity = this.promptRegistry?.get('agent')?.system
+    const identity = systemPromptOverride || regIdentity || this.systemPrompt
     const toolCatalog = this.tools && this.tools.list().length ? buildToolCatalogSection(this.tools.list()) : ''
     const skillsSection = this.skills ? buildSkillsPromptSection(this.skills.catalog()) : ''
     const stickerSection = this.stickers ? buildStickerPromptSection(this.stickers.catalog()) : ''

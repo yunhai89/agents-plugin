@@ -109,6 +109,7 @@ export class RecallStore {
   constructor({
     kv,
     embedFn = null,
+    scanFn = null,
     prefix = 'Yz:agent:mem:',
     cap = 200,
     halflife = { L2: 7, L3: 30, L4: 365 },
@@ -118,6 +119,7 @@ export class RecallStore {
     if (!kv) throw new Error('RecallStore 需要 kv')
     this.kv = kv
     this.embedFn = embedFn
+    this.scanFn = scanFn
     this.prefix = prefix
     this.cap = cap
     this.halflife = halflife
@@ -128,7 +130,24 @@ export class RecallStore {
 
   _key(userId) { return `${this.prefix}${userId}` }
   async _all(userId) { const v = await this.kv.get(this._key(userId)); return Array.isArray(v) ? v : [] }
-  async _save(userId, arr) { await this.kv.set(this._key(userId), arr.slice(0, this.cap)) }
+  async _save(userId, arr) {
+    if (arr.length > this.cap) {
+      // 容量智能淘汰：按综合价值排序后保留前 cap 条（保护高 confidence/高 level/近期 事实，替代 FIFO 丢最旧）
+      arr = arr.map((m) => ({ m, r: this._rank(m) })).sort((a, b) => b.r - a.r).slice(0, this.cap).map((x) => x.m)
+    }
+    await this.kv.set(this._key(userId), arr)
+  }
+
+  /** 综合价值评分（容量淘汰用）：level 权重 × 置信度 × 时间衰减，与 retrieve 排序思路一致 */
+  _rank(mem) {
+    const now = Date.now()
+    const days = (now - (mem.updatedAt || mem.createdAt || now)) / 86400000
+    const hl = this.halflife[mem.level] || 30
+    const decay = Math.pow(0.5, days / hl)
+    const levelW = mem.level === 'L4' ? 1.0 : mem.level === 'L3' ? 0.7 : 0.4
+    const conf = typeof mem.confidence === 'number' ? mem.confidence : 0.5
+    return levelW * (0.4 + conf * 0.6) * decay
+  }
 
   _sim(a, b, ea, eb) {
     if (ea && eb && ea.length && eb.length) return cosine(ea, eb)
@@ -155,6 +174,14 @@ export class RecallStore {
 
   /** 去重感知写入（相似超阈值 → 高置信度覆盖，旧内容进 prev[]） */
   async writeMemory(candidate, userId) {
+    // 威胁扫描：疑似指令注入 → 降置信 + 标 suspect（live 保留原文便于排查，formatForPrompt 屏蔽不喂模型）
+    if (this.scanFn) {
+      try {
+        if (await this.scanFn(candidate.content)) {
+          candidate = { ...candidate, suspect: true, confidence: Math.min((candidate.confidence || 0.5) * 0.3, 0.3) }
+        }
+      } catch { /* 扫描异常保守不标记，照常写入 */ }
+    }
     const all = await this._all(userId)
     for (const mem of all) {
       const haveEmbed = !!(candidate.embedding && mem.embedding)
@@ -216,9 +243,11 @@ export class RecallStore {
   }
 
   formatForPrompt(memories) {
-    if (!memories || !memories.length) return ''
+    // suspect（疑似注入）条目不注入 prompt（防投毒），仅 live 保留供 #记忆 排查
+    const safe = (memories || []).filter((m) => !m.suspect)
+    if (!safe.length) return ''
     const byLevel = { L2: [], L3: [], L4: [] }
-    for (const m of memories) (byLevel[m.level] || (byLevel.L3 = [])).push(m)
+    for (const m of safe) (byLevel[m.level] || (byLevel.L3 = [])).push(m)
     const lines = ['## 关于这位用户的长期记忆（历史信息，非当前输入；如需更多可调用 memory_search 主动检索）']
     const fmt = (m) => {
       const type = m.type ? `[${m.type}]` : ''

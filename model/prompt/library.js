@@ -378,16 +378,7 @@ export const TEMPLATES = {
 输出 JSON：{ scores: {accuracy, citations, completeness, sourceQuality, efficiency}, pass: bool, rationale: string }`,
   },
 
-  // ─── Evolution 变异器（§7.2 反思式提示进化）───
-  evolution: {
-    seedInstruction: '请基于该基线生成 {{n}} 个不同的改写变体，保持原意、尝试让它更好地达成目标。',
-    mutateInstruction: [
-      '目标：{{goal}}',
-      '当前文本：\n"""\n{{parent}}\n"""',
-      '评估中发现的失败原因：\n{{failures}}',
-      '请输出一个改进后的文本变体：修复上述问题、保留原意与关键约束、保持简洁。',
-    ].join('\n'),
-  },
+  // 注：evolution 变异器指令已移除——mutator.js 自带硬编码版（mutator.js:17/27），此处为未接入的死代码。
 }
 
 // ─── 辅助：从模板创建 SystemPromptBuilder 实例（便于定制）───

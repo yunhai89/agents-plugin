@@ -65,9 +65,23 @@ const SECTIONS = [
       { cmd: '#停止mcp +名', desc: '停止某个 MCP 服务端' },
       { cmd: '#mcp', desc: '查看 MCP 连接状态' },
       { cmd: '#agents更新', desc: '更新插件（有改动自动重启）' },
+      { cmd: '#agents版本', desc: '查看当前插件版本号' },
+      { cmd: '#agents更新日志', desc: '查看近期版本更新日志' },
       { cmd: '#agents重载', desc: '热重载配置（免重启）' },
+      { cmd: '#agents状态', desc: '查看插件运行状态（触发模式/模型/调试日志）' },
       { cmd: '#确认 / #拒绝 +id', desc: '审批待执行的危险动作' },
       { cmd: '#待确认', desc: '列出待审批' },
+      { cmd: '#上报错误 +描述', desc: '上报问题给 master（所有人可发，附最近会话日志）' },
+    ],
+  },
+  {
+    title: '在线自进化（主人）',
+    commands: [
+      { cmd: '#审阅进化', desc: '查看后台自评审产出的待审 suggestion（prompt/技能类）' },
+      { cmd: '#采纳 +id', desc: '采纳一条 suggestion（prompt 类下轮生效）' },
+      { cmd: '#拒绝进化 +id', desc: '拒绝并删除一条 suggestion' },
+      { cmd: '#回滚 +key', desc: '回滚 prompt 到内置默认（如 #回滚 agent）' },
+      { cmd: '#进化 prompt +key', desc: '离线 GEPA 进化 prompt（采样轨迹→迭代→judge，约 1-3 分钟）' },
     ],
   },
 ]

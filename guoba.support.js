@@ -130,6 +130,24 @@ export function supportGuoba() {
         { field: 'agent.reply.narrate', label: '中途播报', bottomHelpMessage: '模型调工具时附带的思路/进展自动转发给用户（别埋头苦干）；默认开', component: 'Switch' },
         { field: 'agent.reply.renderScale', label: '回复图清晰度倍率', bottomHelpMessage: 'deviceScaleFactor：2=高清（默认），1=普通；越大越清晰但越耗内存', component: 'InputNumber', componentProps: { min: 1, max: 4 } },
 
+        // —— 记忆与召回 ——
+        { label: '记忆与召回', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.memory.enable', label: '声明式记忆', bottomHelpMessage: '注入 MEMORY.md/USER.md 到 system；默认开', component: 'Switch' },
+        { field: 'agent.memory.threatScan', label: '记忆注入扫描', bottomHelpMessage: '写长期记忆前扫描指令注入（命中标 suspect，召回屏蔽，#记忆 仍可见原文）；默认开', component: 'Switch' },
+        { field: 'agent.recall.cap', label: '长期记忆条数上限', bottomHelpMessage: '每用户上限；超限按价值(confidence/level/时间)淘汰，非 FIFO', component: 'InputNumber', componentProps: { min: 10 } },
+        { field: 'agent.recall.extractEvery', label: 'LLM 抽取间隔(轮)', bottomHelpMessage: '每 N 轮触发一次 LLM 抽取（意图词"记住/叫我"等仍即时触发）', component: 'InputNumber', componentProps: { min: 1 } },
+        { field: 'agent.recall.model', label: '抽取用模型(可选)', bottomHelpMessage: '留空=utilityModel→主模型', component: 'Input', componentProps: { placeholder: '留空=主模型' } },
+        { field: 'agent.recall.embedProvider', label: '语义召回 embedding(可选)', bottomHelpMessage: '填 embedding 模型 id 走 cosine 语义匹配；留空=关键词 jaccard 召回', component: 'Input', componentProps: { placeholder: '留空=关键词召回' } },
+
+        // —— 在线自进化 ——
+        { label: '在线自进化', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.selfReview.enable', label: '后台自评审', bottomHelpMessage: '每 N 轮对话后台异步自我评审，产出改进 suggestion；不阻塞回复；默认开', component: 'Switch' },
+        { field: 'agent.selfReview.every', label: '评审间隔(轮)', bottomHelpMessage: '每 N 轮对话触发一次后台自评审', component: 'InputNumber', componentProps: { min: 5 } },
+        { field: 'agent.selfReview.model', label: '评审用模型(可选)', bottomHelpMessage: '留空=utilityModel→主模型；建议廉价小模型降本', component: 'Input', componentProps: { placeholder: '留空=主模型' } },
+        { field: 'agent.selfReview.autoApplyMemory', label: '记忆自动应用', bottomHelpMessage: '记忆类 suggestion 自动写入（有回滚+威胁扫描+置信度闸）；默认开', component: 'Switch' },
+        { field: 'agent.selfReview.autoApplyPrompt', label: 'prompt 自动应用【不建议】', bottomHelpMessage: 'prompt/技能类自动应用；默认关（落盘待审，#审阅进化 人工把关）', component: 'Switch' },
+        { field: 'agent.selfReview.dailyBudgetTokens', label: '日 token 预算', bottomHelpMessage: '自评审日预算上限，耗尽则只采迹不评审', component: 'InputNumber', componentProps: { min: 0, step: 10000 } },
+
         // —— 深度思考 ——
         { label: '深度思考（Thinking）', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.thinking.enable', label: '开启深度思考', bottomHelpMessage: 'Anthropic 等支持的扩展思考：模型先思考再作答（更慢、更耗 token，但复杂问题质量更高）', component: 'Switch' },
