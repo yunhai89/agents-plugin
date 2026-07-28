@@ -11,6 +11,8 @@
  * register 为变参（支持单个 / 多个 / 数组 / 嵌套数组），修复"spread 只注册首个"的隐患。
  */
 
+import { cosine } from '../recall.js'
+
 function brief(v, n = 160) {
   let s
   if (v == null) s = String(v)
@@ -34,6 +36,16 @@ export class ToolRegistry {
   constructor({ logger = () => {} } = {}) {
     this.tools = new Map()
     this.logger = logger
+    this._index = null // 工具检索索引（懒构建）
+    this._indexDirty = true // register/unregister/setEmbedFn 置脏 → search 时重建
+    this._embedFn = null // 可选 embedding 函数（apps 注入；留空 = 纯关键词 jaccard）
+  }
+
+  /** 注入 embedding 函数（apps 用；留空 = 纯关键词 jaccard 检索）。切换会重建索引。 */
+  setEmbedFn(fn) {
+    this._embedFn = typeof fn === 'function' ? fn : null
+    this._indexDirty = true
+    return this
   }
 
   /** 注入日志器（AOP 切面用它打印） */
@@ -52,6 +64,7 @@ export class ToolRegistry {
       if (typeof tool.execute !== 'function') throw new Error(`工具 ${tool.name} 必须包含 execute 函数`)
       this.tools.set(tool.name, this.#wrap(tool))
     }
+    this._indexDirty = true
     return this
   }
 
@@ -94,7 +107,9 @@ export class ToolRegistry {
   }
 
   unregister(name) {
-    return this.tools.delete(name)
+    const r = this.tools.delete(name)
+    this._indexDirty = true
+    return r
   }
 
   has(name) {
@@ -124,26 +139,104 @@ export class ToolRegistry {
     return list
   }
 
-  /** 转 OpenAI tools 格式 */
-  toOpenaiTools() {
-    return this.list().map((t) => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description || '',
-        parameters: t.parameters || { type: 'object', properties: {} },
-      },
-    }))
+  /**
+   * 构建/刷新工具检索索引（懒重建：register/unregister/setEmbedFn 置脏）。
+   * 索引文本 = name + category + description + summary + 派生关键词 + 必填参数名；
+   * tokens 预算缓存，避免每次 search 重算。元工具 tool_search 自身不入索引。
+   */
+  _ensureIndex() {
+    if (this._index && !this._indexDirty) return
+    const idx = []
+    for (const tool of this.tools.values()) {
+      if (!tool || tool.name === 'tool_search') continue
+      const required = tool.parameters?.required || []
+      const summary = String(tool.meta?.summary || tool.description || '').replace(/\s+/g, ' ').trim()
+      const text = [tool.name, tool.category, tool.description, tool.meta?.summary, ...deriveKeywords(tool), ...required].filter(Boolean).join(' ')
+      idx.push({
+        name: tool.name,
+        category: tool.category || 'query',
+        summary,
+        required,
+        tokens: toolTokenize(text),
+        embedding: null, // lazy：首次 search 且 embedFn 可用时才填
+      })
+    }
+    this._index = idx
+    this._indexDirty = false
   }
 
-  /** 转 Anthropic tools 格式 */
-  toAnthropicTools() {
-    return this.list().map((t) => ({
-      name: t.name,
-      description: t.description || '',
-      input_schema: t.parameters || { type: 'object', properties: {} },
-    }))
+  /**
+   * 按自然语言 query 检索工具（双轨：有 embedding 走 cosine，否则 query 覆盖率打分）。
+   * 覆盖率 = query tokens 命中文档的比例（|∩|/|query|），不受文档长度影响，对短查询友好。
+   * @returns {Promise<Array<{name,score,category,summary,required}>>} 按 score 降序、过滤 minScore、截断 topK
+   */
+  async search(query, { topK = 8, category, minScore = 0.3 } = {}) {
+    this._ensureIndex()
+    const q = String(query || '').trim()
+    if (!q || !this._index.length) return []
+    const qTokens = toolTokenize(q)
+    if (!qTokens.size) return []
+    let qEmbed = null
+    if (this._embedFn) {
+      try { qEmbed = await this._embedFn(q) } catch { qEmbed = null } // embed 失败 → 降级关键词覆盖率
+    }
+    const scored = []
+    for (const doc of this._index) {
+      if (category && doc.category !== category) continue
+      let sim
+      if (qEmbed) {
+        if (!doc.embedding) {
+          try { doc.embedding = await this._embedFn([doc.name, doc.summary].join(' ')) } catch { doc.embedding = null }
+        }
+        sim = (qEmbed && doc.embedding) ? cosine(qEmbed, doc.embedding) : coverage(qTokens, doc.tokens)
+      } else {
+        sim = coverage(qTokens, doc.tokens)
+      }
+      if (sim >= minScore) scored.push({ name: doc.name, score: sim, category: doc.category, summary: doc.summary, required: doc.required })
+    }
+    return scored.sort((a, b) => b.score - a.score).slice(0, topK)
   }
+}
+
+/**
+ * 工具检索专用分词：CJK 单字 + CJK 2-gram + Latin/数字词（≥2）。
+ * 比 recall.tokenize 多含单字——短查询（如"踢人"）靠单字"踢"命中"踢出群成员"，
+ * 避免 2-gram 无交集导致漏召回。
+ */
+function toolTokenize(s) {
+  const t = String(s || '').toLowerCase()
+  const grams = new Set()
+  for (let i = 0; i < t.length; i++) {
+    const code = t.charCodeAt(i)
+    if (code >= 0x4e00 && code <= 0x9fff) {
+      grams.add(t[i]) // 单字（短查询召回关键）
+      if (i + 1 < t.length) {
+        const next = t.charCodeAt(i + 1)
+        if (next >= 0x4e00 && next <= 0x9fff) grams.add(t.slice(i, i + 2)) // 2-gram（精排）
+      }
+    }
+  }
+  ;(t.match(/[a-z0-9]{2,}/g) || []).forEach((w) => grams.add(w))
+  return grams
+}
+
+/** query 覆盖率：query tokens 中命中文档的比例（|∩|/|query|），不受文档长度影响 */
+function coverage(qTokens, docTokens) {
+  if (!qTokens?.size) return 0
+  let n = 0
+  for (const t of qTokens) if (docTokens?.has(t)) n++
+  return n / qTokens.size
+}
+
+/** 从 name/description 派生发现用关键词（内联以避免与 skill 模块耦合；逻辑同 skill/index.js） */
+function deriveKeywords(tool) {
+  const out = new Set()
+  const push = (s) => { const t = String(s || '').trim(); if (t) out.add(t) }
+  for (const seg of String(tool.name || '').split(/[-_/\s]+/)) if (seg.length >= 2) push(seg)
+  const desc = String(tool.description || '')
+  ;(desc.match(/[一-龥]{2,}/g) || []).forEach(push)
+  ;(desc.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || []).forEach(push)
+  return [...out].slice(0, 16)
 }
 
 export { brief }

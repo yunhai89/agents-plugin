@@ -192,6 +192,41 @@ export function buildToolCatalogSection(tools) {
   return lines.join('\n')
 }
 
+/** 按需发现模式的分类说明（给 LLM 的"有什么大类"总览，不列具体工具名） */
+const TOOL_CATEGORY_DESC = {
+  query: '群信息/文件列表/米游社/Pixiv 查询/计算/文档读取等只读检索（人人可用）',
+  personal: '记忆/笔记等用户私有作用域（人人可用）',
+  message: '发 AI 语音/合并转发等（成员以上）',
+  group_manage: '踢人/禁言/头衔/群文件管理等（群管以上，调用需审批）',
+  system: '重载技能/终端/群设置等（主人，调用需审批）',
+}
+
+/**
+ * 工具发现索引（按需发现模式专用）：常驻工具速查 + 分类总览 + tool_search 使用说明。
+ * 不逐个列全量工具名（否则又把几十个名字塞进 system prompt，抵消 token 收益）——
+ * LLM 只知道"有什么大类"，靠 tool_search 查具体工具。
+ * @param {object} p { alwaysOnTools: 常驻工具对象数组, categories: 分类列表 }
+ */
+export function buildToolDiscoverySection({ alwaysOnTools = [], categories = [] } = {}) {
+  const lines = ['## 工具（按需发现）']
+  lines.push('你只常驻少数核心工具。完成需要其它能力的任务时，先调用 `tool_search`（用一句自然语言描述"你要做什么"），它会检索并激活匹配的工具，激活后即可直接调用。')
+  const on = (alwaysOnTools || []).filter(Boolean)
+  if (on.length) {
+    lines.push('常驻工具（可直接用）：')
+    for (const t of on) {
+      const raw = String(t.meta?.summary || t.description || '').replace(/\s+/g, ' ').trim()
+      const short = raw.length > 40 ? raw.slice(0, 40) + '…' : raw
+      lines.push(`- ${t.name}：${short || '（见工具定义）'}`)
+    }
+  }
+  if (categories.length) {
+    lines.push('可发现的工具类别（用 tool_search 的 query 自然语言搜，或传 category 浏览某类）：')
+    for (const c of categories) lines.push(`- ${c}：${TOOL_CATEGORY_DESC[c] || ''}`)
+    lines.push('（被搜到的高危类工具，调用时仍需审批——安全不变）')
+  }
+  return lines.join('\n')
+}
+
 /**
  * Agent 结构化 system prompt 组装（稳定前缀 → 动态后缀，保护 KV 缓存）。
  * 层序：身份 → 服务准则 → 执行取向 → 工具目录 → 技能 → 记忆 → 情境 → 安全。

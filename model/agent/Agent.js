@@ -14,10 +14,14 @@
 
 import { randomUUID } from 'node:crypto'
 import { ExecutionContext } from './tools/context.js'
+import { makeToolSearchTool } from './tools/tool_search.js'
 import { stringifyArgs, estimateMessages, mergeUsage } from './messages.js'
-import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildSkillsPromptSection, buildStickerPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
+import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildToolDiscoverySection, buildSkillsPromptSection, buildStickerPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
 
 const DEFAULT_IDENTITY = TEMPLATES.agent.system
+
+/** 按需发现默认常驻工具（不经过搜索；config.toolDiscovery.alwaysOn 留空时兜底）。tool_search 始终由元工具注入。 */
+const DEFAULT_ALWAYS_ON = ['tool_search', 'clarify', 'memory_search', 'web_search', 'skill', 'get_chat_history']
 
 /** 紧凑用量日志：兼容 per-turn(prompt/completion_tokens) 与 mergeUsage(input/output/total) 两种形态 */
 function fmtUsage(u) {
@@ -99,6 +103,13 @@ export class Agent {
 
     // 回退 provider 列表（每条 {provider, model}，独立 baseURL/apiKey/protocol，可跨厂商）；主模型失败时依次尝试
     this.fallbackProviders = Array.isArray(config.fallbackProviders) ? config.fallbackProviders : []
+
+    // 工具按需发现（Tool Discovery）：null=全量模式；Set=按需模式（常驻核心工具 + 命中后扩充）
+    this.toolDiscovery = config.toolDiscovery || null
+    this.activeTools = null
+    this._metaTools = {} // per-instance 元工具（tool_search 闭包绑 this，并发安全）
+    this._curTaskId = null // run() 内暂存，供元工具 devLog
+    this._curDevScope = null
     this.messages = []
   }
 
@@ -182,10 +193,23 @@ export class Agent {
     let lastContent = ''
     let usedTools = false      // 本轮是否调用过工具（auto 门控：仅非平凡任务触发反思，纯闲聊零延迟）
     let reflectIter = 0        // 已触发的反思回环次数（reflectMaxIterations 封顶，防无限循环）
-    const toolList = this.tools?.list?.() || []
+    // 工具按需发现：按 enable 初始化激活集 + per-instance 元工具（同 run 内激活持续、新 run 重置）
+    const td = this.toolDiscovery
+    const discoveryOn = !!(td?.enable && this.tools)
+    if (discoveryOn) {
+      this.activeTools = new Set(td.alwaysOn?.length ? td.alwaysOn : DEFAULT_ALWAYS_ON)
+      this._metaTools = { tool_search: makeToolSearchTool(this.tools, this, td) }
+    } else {
+      this.activeTools = null
+      this._metaTools = {}
+    }
+    this._curTaskId = taskId
+    this._curDevScope = ctx?.devScope || null
     const __runStart = Date.now()
-    this.logger('mark', 'run start user=', ctx?.userId, 'gid=', ctx?.groupId, 'conv=', ctx?.conversationId, 'inputLen=', rawText.length, 'msgs=', this.messages.length, 'tools=', toolList.length, 'maxTurns=', this.maxTurns)
-    this.devLog?.('run_start', { user: ctx?.userId, gid: ctx?.groupId, conv: ctx?.conversationId, scopeUserId, scopeId, model: this.model, msgs: this.messages.length, tools: toolList.length, maxTurns: this.maxTurns, inputLen: rawText.length }, taskId, ctx?.devScope)
+    const __tools0 = this._buildToolList()
+    const __toolsTokensEst = estimateMessages(__tools0.map((t) => ({ content: JSON.stringify({ n: t.name, d: t.description, p: t.parameters }) })))
+    this.logger('mark', 'run start user=', ctx?.userId, 'gid=', ctx?.groupId, 'conv=', ctx?.conversationId, 'inputLen=', rawText.length, 'msgs=', this.messages.length, 'tools=', __tools0.length + (discoveryOn ? `/${this.tools.list().length} discovery=on` : ''), 'maxTurns=', this.maxTurns)
+    this.devLog?.('run_start', { user: ctx?.userId, gid: ctx?.groupId, conv: ctx?.conversationId, scopeUserId, scopeId, model: this.model, msgs: this.messages.length, tools: this.tools?.list?.().length || 0, discoveryOn, activeTools: this.activeTools ? [...this.activeTools] : null, toolsSent: __tools0.length, toolsTokensEst: __toolsTokensEst, maxTurns: this.maxTurns, inputLen: rawText.length }, taskId, ctx?.devScope)
 
     while (turns < this.maxTurns) {
       if (signal?.aborted) throw new Error('aborted')
@@ -202,6 +226,7 @@ export class Agent {
         }
       }
 
+      const toolList = this._buildToolList() // 每轮重算：tool_search 命中后 activeTools 扩充，下轮须重新合成
       const __t0 = Date.now()
       // 主模型失败时依次尝试回退 provider（各自独立 baseURL/apiKey/protocol，可跨厂商）
       const __chatWith = (prov, m) => prov.chat({
@@ -226,7 +251,7 @@ export class Agent {
         turn: turns, finish: result.finishReason, contentLen: (result.content || '').length,
         content: result.content || '', reasoning: !!result.reasoning,
         toolCalls: (result.toolCalls || []).map((tc) => ({ name: tc.name, arguments: tc.arguments })),
-        usage: result.usage || null, ms: __ms,
+        usage: result.usage || null, ms: __ms, toolsSent: toolList.length, ...(discoveryOn ? { activeTotal: this.activeTools.size } : {}),
       }, taskId, ctx?.devScope)
 
       // 防 API 报错："assistant message content or tool_calls must be set"
@@ -354,7 +379,14 @@ export class Agent {
     // identity 优先级：人设 override > 进化产出(registry) > config.systemPrompt > 默认 TEMPLATES.agent.system
     const regIdentity = this.promptRegistry?.get('agent')?.system
     const identity = systemPromptOverride || regIdentity || this.systemPrompt
-    const toolCatalog = this.tools && this.tools.list().length ? buildToolCatalogSection(this.tools.list()) : ''
+    // 工具目录：按需发现模式→常驻工具速查 + 分类总览（不列全量工具名，防抵消 token 收益）；全量模式→原速查
+    let toolCatalog = ''
+    if (this.toolDiscovery?.enable && this.tools) {
+      const alwaysOnTools = this.activeTools ? [...Object.values(this._metaTools), ...[...this.activeTools].map((n) => this.tools.get(n)).filter(Boolean)] : []
+      toolCatalog = buildToolDiscoverySection({ alwaysOnTools, categories: ['query', 'personal', 'message', 'group_manage', 'system'] })
+    } else if (this.tools && this.tools.list().length) {
+      toolCatalog = buildToolCatalogSection(this.tools.list())
+    }
     const skillsSection = this.skills ? buildSkillsPromptSection(this.skills.catalog()) : ''
     const stickerSection = this.stickers ? buildStickerPromptSection(this.stickers.catalog()) : ''
     let recalledMemory = ''
@@ -373,6 +405,17 @@ export class Agent {
       context,
       guardHardening,
     })
+  }
+
+  /**
+   * 合成本轮下发的工具列表：全量模式→全部；按需模式→ per-instance 元工具 ∪ registry.match(activeTools)。
+   * 每轮调用（tool_search 可能在上一轮扩充 activeTools）。
+   */
+  _buildToolList() {
+    if (!this.tools) return []
+    if (!this.activeTools) return this.tools.list()
+    const matched = this.tools.match({ names: [...this.activeTools] })
+    return [...Object.values(this._metaTools), ...matched]
   }
 
   _estimateHistory(system) {
@@ -454,7 +497,7 @@ export class Agent {
   async _executeOne(tc, execCtx, cb, ctx) {
     const __t = Date.now()
     cb.onToolStart?.(tc)
-    const tool = this.tools?.get?.(tc.name)
+    const tool = this.tools?.get?.(tc.name) ?? this._metaTools?.[tc.name]
     // 注：工具调用入参/耗时/结果/错误的日志由 ToolRegistry 的 AOP 切面统一打印，
     // 这里只记录调度层关心的 outcome（未注册 / 被策略拦截 / 审批拒绝）。
     let content

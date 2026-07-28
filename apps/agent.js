@@ -32,6 +32,7 @@ import { presets as anthropicPresets } from '../model/anthropic/index.js'
 import { McpManager } from '../model/mcp/index.js'
 import { createMediaService, makeMediaTools } from '../model/media/index.js'
 import { detectCapabilities } from '../model/llm/capabilities.js'
+import { embed } from '../model/llm/embed.js'
 import { groupInfoTools, groupManageTools, groupHistoryTools, groupNoticeTools, groupFileTools, aiVoiceTools, forwardTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
 import { pixivTools } from '../model/pixiv/index.js'
@@ -343,6 +344,11 @@ async function buildRuntime() {
     ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
 
+  // 可选 embedding 函数：填了 recall.embedProvider 才造（OpenAI 兼容端点），供工具检索 + recall 语义召回共用
+  const embedFn = cfg.recall?.embedProvider
+    ? (text) => embed(text, { client: provider, model: cfg.recall.embedProvider })
+    : null
+
   // 回退 provider：每条独立 baseURL/apiKey/protocol（可跨厂商，如主 DeepSeek + 回退 GPT）
   const fallbackProviders = []
   const fbList = [...(Array.isArray(cfg.fallbackModels) ? cfg.fallbackModels : [])]
@@ -386,8 +392,8 @@ async function buildRuntime() {
     cap: cfg.recall?.cap,
     extractEvery: cfg.recall?.extractEvery,
     scanFn: recallScanFn,
-    // embedFn 暂留 null：cfg.recall.embedProvider 填模型 id 后，此处注入 makeEmbedFn(cfg) 即走 cosine 语义召回
-    embedFn: null,
+    // embedding（可选）：填了 recall.embedProvider 即走 cosine 语义召回，否则纯关键词 jaccard
+    embedFn,
   })
   // confirmTimeout 配置单位是「秒」，ConfirmStore 用「毫秒」，这里换算（默认 300 秒）
   const confirm = new ConfirmStore({ timeout: (cfg.confirmTimeout || 300) * 1000 })
@@ -483,6 +489,9 @@ async function buildRuntime() {
   const mcp = new McpManager({ registry: tools, logger: Log.tag('mcp'), requestTimeout: cfg.mcp?.requestTimeout })
   mcp.start(cfg.mcp?.servers || {}).catch((e) => Log.error('[mcp] 启动失败', e?.message || e))
 
+  // 工具按需发现：检索 embedding（可选，复用上面的 embedFn）；未填则 registry 用纯关键词 jaccard
+  tools.setEmbedFn(embedFn)
+
   // recall 抽取用的轻量 LLM 通道：复用主 provider、换廉价 model id（utilityModel 降本，留空沿用主模型）
   // llmExtract 已自拼抽取指令+对话，此处只需做「无脑 chat 通道」（recall.js 兼容 llm.run 与函数两种形态）
   const recallModel = cfg.recall?.model || cfg.utilityModel || cfg.model
@@ -559,6 +568,13 @@ async function buildRuntime() {
     contextPressureThreshold: cfg.contextPressureThreshold ?? (cfg.contextWindow ? Math.floor(cfg.contextWindow * 0.8) : null),
     maxToolResultChars: cfg.maxToolResultChars ?? 4000,
     keepReasoning: cfg.keepReasoning === true,
+    // 工具按需发现：LLM 只常驻少数核心工具，其余经 tool_search 检索后动态注入（默认开；关则回退全量常驻）
+    toolDiscovery: {
+      enable: cfg.toolDiscovery?.enable !== false,
+      alwaysOn: Array.isArray(cfg.toolDiscovery?.alwaysOn) ? cfg.toolDiscovery.alwaysOn : undefined,
+      topK: cfg.toolDiscovery?.topK ?? 8,
+      minScore: cfg.toolDiscovery?.minScore ?? 0.3,
+    },
     reflect: cfg.reflect ?? 'auto',
     reflectMaxIterations: cfg.reflectMaxIterations ?? 1,
     stickers: getStickerManager({ logger: Log.tag('sticker') }), // 表情包清单注入（_assembleSystem 用 catalog()）

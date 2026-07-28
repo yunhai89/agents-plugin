@@ -140,6 +140,13 @@ export function supportGuoba() {
         { field: 'agent.recall.embedProvider', label: '语义召回 embedding(可选)', bottomHelpMessage: '填 embedding 模型 id 走 cosine 语义匹配；留空=关键词 jaccard 召回', component: 'Input', componentProps: { placeholder: '留空=关键词召回' } },
 
         // —— 在线自进化 ——
+        // —— 工具按需发现 ——
+        { label: '工具按需发现（Tool Discovery）', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.toolDiscovery.enable', label: '启用按需发现', bottomHelpMessage: 'LLM 只常驻少数核心工具，其余经 tool_search 检索后动态注入（省 token）；默认开，关则回退全量常驻', component: 'Switch' },
+        { field: 'agent.toolDiscovery.alwaysOn', label: '常驻工具(每行一个)', bottomHelpMessage: '不经过搜索、始终可用的工具名；留空用内置默认：tool_search / clarify / memory_search / web_search / skill / get_chat_history', component: 'InputTextArea' },
+        { field: 'agent.toolDiscovery.topK', label: 'tool_search 返回数', component: 'InputNumber', componentProps: { min: 1, max: 20 } },
+        { field: 'agent.toolDiscovery.minScore', label: '最低相似度', bottomHelpMessage: '低于此值不返回；jaccard 下 0.1 较宽松', component: 'InputNumber', componentProps: { min: 0, max: 1, step: 0.05 } },
+
         { label: '在线自进化', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.selfReview.enable', label: '后台自评审', bottomHelpMessage: '每 N 轮对话后台异步自我评审，产出改进 suggestion；不阻塞回复；默认开', component: 'Switch' },
         { field: 'agent.selfReview.every', label: '评审间隔(轮)', bottomHelpMessage: '每 N 轮对话触发一次后台自评审', component: 'InputNumber', componentProps: { min: 5 } },
@@ -219,6 +226,7 @@ export function supportGuoba() {
         const data = JSON.parse(JSON.stringify(Config.get()))
         // masters 数组 → 多行文本（textarea 展示）
         if (Array.isArray(data?.agent?.masters)) data.agent.masters = data.agent.masters.join('\n')
+        if (Array.isArray(data?.agent?.toolDiscovery?.alwaysOn)) data.agent.toolDiscovery.alwaysOn = data.agent.toolDiscovery.alwaysOn.join('\n')
         // thinking：provider 原生 {type,budget_tokens}|null → 面板友好 {enable,budget_tokens}
         const tk = data?.agent?.thinking
         data.agent.thinking = { enable: !!tk && tk?.type !== 'disabled', budget_tokens: tk?.budget_tokens || 16000 }
@@ -277,6 +285,9 @@ export function supportGuoba() {
             val = val.split('\n').map((s) => String(s).trim()).filter(Boolean)
           }
           if (p === 'agent.masters') val = val.map((x) => String(x))
+          if (p === 'agent.toolDiscovery.alwaysOn' && typeof val === 'string') {
+            val = val.split('\n').map((s) => String(s).trim()).filter(Boolean)
+          }
           setPath(cfg, p, val)
         }
         Config.save(cfg)
