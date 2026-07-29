@@ -11,6 +11,7 @@ export class OpenAIProvider extends Provider {
     this.client = config.client || createClient(clientOpts(config))
     this.reasoningFields = config.reasoningFields || this.client.reasoningFields || []
     this.systemRole = config.systemRole || 'system' // 'system' | 'developer'
+    this._modelsNoTemp = new Set() // 自适应记忆：拒绝过 temperature 的模型（推理模型如 kimi-k2.6/r1/o1），后续不传
   }
 
   async chat(opts) {
@@ -38,7 +39,10 @@ export class OpenAIProvider extends Provider {
       const tc = mapToolChoice(tool_choice, 'openai')
       if (tc) body.tool_choice = tc
     }
-    if (temperature != null) body.temperature = temperature
+    // 推理模型（kimi-k2.6 / deepseek-r1 / o1 等）常只允许固定 temperature；
+    // 记住拒绝过 temperature 的模型，直接不传（用模型默认），避免每轮失败重试。
+    const useTemp = temperature != null && !this._modelsNoTemp.has(body.model)
+    if (useTemp) body.temperature = temperature
     if (top_p != null) body.top_p = top_p
     if (max_tokens != null) body.max_tokens = max_tokens
     if (thinking) body.thinking = thinking
@@ -47,6 +51,21 @@ export class OpenAIProvider extends Provider {
       body.stream_options = { include_usage: true }
     }
 
+    try {
+      return await this._create(body, { signal, stream, onDelta, onReasoning })
+    } catch (e) {
+      // 自适应：API 报 temperature 非法 → 去掉 temperature 用模型默认重试一次，并记住该模型
+      if (body.temperature != null && this._isTempError(e)) {
+        this._modelsNoTemp.add(body.model)
+        delete body.temperature
+        return await this._create(body, { signal, stream, onDelta, onReasoning })
+      }
+      throw e
+    }
+  }
+
+  /** 实际发起 create（流式/非流式），供 chat 的 temperature 自适应重试复用 */
+  async _create(body, { signal, stream, onDelta, onReasoning }) {
     if (stream) {
       const s = await this.client.chat.completions.create({ ...body, signal })
       for await (const part of s) {
@@ -55,9 +74,14 @@ export class OpenAIProvider extends Provider {
       }
       return this._resultFromStream(s)
     }
-
     const res = await this.client.chat.completions.create({ ...body, signal })
     return this._resultFromResponse(res)
+  }
+
+  /** 是否"temperature 不被模型接受"类错误（按错误信息判定，不硬编码模型清单） */
+  _isTempError(e) {
+    const m = String(e?.message || e).toLowerCase()
+    return m.includes('temperature') || m.includes('only 1 is allowed')
   }
 
   _toMessages(messages, system) {
