@@ -64,12 +64,21 @@ let _publicIpAt = 0
 const PRIVATE_RE = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/
 async function detectPublicIp() {
   if (_publicIp && Date.now() - _publicIpAt < 600000) return _publicIp
-  const apis = ['https://4.ipw.cn', 'https://api.ipify.org', 'https://ifconfig.me/ip']
+  // 实测（2026-07，本机 Node fetch）：4.ipw.cn / api.ipify.org / ifconfig.me 均失败，
+  // 改用成功率高的 ident.me / api.ip.sb（纯文本），ip-api.com/json 作 JSON 兜底（慢但稳）。
+  const apis = [
+    'https://ident.me',
+    'https://api.ip.sb/ip',
+    'http://ip-api.com/json',
+    'https://api.ipify.org',
+    'https://ifconfig.me/ip',
+  ]
   for (const url of apis) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(3000), headers: { 'User-Agent': 'curl/8' } })
+      const r = await fetch(url, { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': 'curl/8' } })
       if (!r.ok) continue
-      const ip = (await r.text()).trim()
+      let ip = (await r.text()).trim()
+      if (url.includes('ip-api.com')) { try { ip = JSON.parse(ip).query || '' } catch { ip = '' } }
       // 必须是合法公网 IPv4（排除私网/回环，防 API 返回内网代理地址）
       if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !PRIVATE_RE.test(ip)) {
         _publicIp = ip
