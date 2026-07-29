@@ -18,7 +18,7 @@ const STATES = new Set(['draft', 'rejected', 'verified', 'approved', 'stable', '
 const TRANSITIONS = {
   draft: ['verified', 'rejected'],
   rejected: [],
-  verified: ['approved', 'rejected'],
+  verified: ['approved', 'stable', 'rejected'],
   approved: ['stable', 'rejected'],
   stable: ['quarantined', 'deprecated'],
   quarantined: ['deprecated'],
