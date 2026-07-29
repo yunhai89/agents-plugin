@@ -100,7 +100,7 @@ export class AnthropicClient {
 
     if (isStream) {
       const res = await requestWithRetry({ ...common, stream: true })
-      return createMessageStream(res)
+      return createMessageStream(res, { idleMs: opts.timeout ?? this.timeout })
     }
 
     const { data } = await requestWithRetry({ ...common, stream: false })
