@@ -283,7 +283,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 42px; cursor: pointer; vertical-align: middle; }
 .switch input { position: absolute; opacity: 0; width: 0; height: 0; }
 .switch .slider {
-  position: absolute; inset: 0; border-radius: 999px;
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%; border-radius: 999px;
   background: #d7deeb; transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .switch .slider::before {
@@ -638,7 +638,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .tl-head > svg { width: 15px; height: 15px; flex: 0 0 15px; }
 .tl-head > b { white-space: nowrap; flex: 0 0 auto; }
 .tl-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tl-body { border-top: 1px dashed var(--border); padding: 12px 14px; background: var(--surface-2); }
+.tl-body { border-top: 1px dashed var(--border); padding: 12px 14px; background: var(--surface-2); min-width: 0; overflow: hidden; }
 .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 12.5px; }
 .kv dt { color: var(--text-3); font-weight: 600; }
 .kv dd { margin: 0; word-break: break-all; }
@@ -647,6 +647,7 @@ pre.code {
   background: #f6f8fc; border: 1px solid var(--border);
   font-family: var(--mono); font-size: 12px; line-height: 1.7;
   overflow: auto; max-height: 320px; color: #3b4763;
+  min-width: 0; white-space: pre-wrap; word-break: break-all; overflow-wrap: anywhere;
 }
 
 /* —— 审批 —— */
@@ -691,6 +692,8 @@ pre.code {
 .cols-wide { grid-template-columns: 1.7fr 1fr; }
 .cols-300 { grid-template-columns: 300px 1fr; }
 .cols-320 { grid-template-columns: 320px 1fr; }
+/* 侧栏布局:直接子允许收缩,杜绝 pre/长串撑爆列宽导致整页横向滚动 */
+.cols-wide > *, .cols-300 > *, .cols-320 > * { min-width: 0; }
 
 /* 汉堡按钮(仅移动端显示) */
 .nav-burger {

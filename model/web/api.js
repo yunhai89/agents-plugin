@@ -12,7 +12,7 @@ import Config from '../../utils/Config.js'
 import { setPath } from '../../utils/path.js'
 import { getRuntime, fireReminder } from '../../apps/agent.js'
 import { redactConfig } from './redact.js'
-import { listLogFiles, readLogFile, aggregateStats } from './logs.js'
+import { listLogFiles, readLogFile, aggregateStats, queryLogFiles } from './logs.js'
 import { ok, fail, asyncHandler, CODE } from './response.js'
 import { listAllSuggestions, applySuggestion, removeSuggestion } from '../evolution/review.js'
 
@@ -57,10 +57,11 @@ router.get('/scopes', asyncHandler(async (req, res) => {
   return ok(res, out)
 }))
 
-// GET /api/logs/files —— 日志文件列表（不含 events，懒加载）
+// GET /api/logs/files —— 会话日志文件列表（默认最新10条；支持 from/to/event/q 筛选）。返回 {items,total}
 router.get('/logs/files', asyncHandler(async (req, res) => {
-  const files = listLogFiles(Config.path.logs).map((f) => ({ file: f.file, label: f.label }))
-  return ok(res, files)
+  const { from, to, event, q } = req.query
+  const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 10
+  return ok(res, queryLogFiles(Config.path.logs, { from, to, event, q, limit }))
 }))
 
 // GET /api/logs?file= —— 单文件事件流（{file,label,events}，对齐 mock）

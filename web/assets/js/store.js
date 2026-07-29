@@ -11,7 +11,7 @@
   // 覆盖为空 reactive（mock.js 若已加载则被覆盖；视图读取零改动，loadX 后填充）
   const MOCK = window.MOCK = reactive({
     config: null, scopes: [], memories: {}, recall: {}, personas: [], skills: [],
-    conversations: [], sessions: {}, logFiles: [], schedules: [], confirms: [],
+    conversations: [], sessions: {}, logFiles: [], logFilesTotal: 0, schedules: [], confirms: [],
     suggestions: [], perceptions: [], tokenTrend: [], toolTop: [],
   })
 
@@ -66,7 +66,11 @@
     async loadSkills() { MOCK.skills = await api.get('/skills') },
     async loadConversations(userId, groupId) { MOCK.conversations = await api.get('/conversations', { userId, groupId }) },
     async loadSession(convId, userId, groupId) { MOCK.sessions[convId] = await api.get('/sessions', { convId, userId, groupId }) },
-    async loadLogFiles() { MOCK.logFiles = (await api.get('/logs/files')).map((f) => ({ ...f, events: [] })) },
+    async loadLogFiles(query) {
+      const d = await api.get('/logs/files', query)
+      MOCK.logFiles = (d.items || []).map((f) => ({ ...f, events: [] }))
+      MOCK.logFilesTotal = d.total ?? MOCK.logFiles.length
+    },
     async loadLogEvents(file) {
       const d = await api.get('/logs', { file })
       const i = MOCK.logFiles.findIndex((f) => f.file === file)

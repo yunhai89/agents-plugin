@@ -21,7 +21,7 @@
   window.VIEWS.logs = {
     name: 'LogsView',
     setup() {
-      const { ref, computed, onMounted } = Vue
+      const { ref, reactive, computed, onMounted } = Vue
       const M = window.MOCK
       const { fmt } = window.UI
 
@@ -63,6 +63,28 @@
       }
       const events = computed(() => traces.value.find((t) => t.traceId === activeTrace.value)?.events || [])
 
+      /* 筛选：默认最新10条；日期范围/事件类型/关键词任意组合，留空即不过滤 */
+      const filter = reactive({ from: '', to: '', event: '', q: '' })
+      const hitTotal = computed(() => M.logFilesTotal ?? M.logFiles.length)
+      const buildQuery = () => {
+        const o = {}
+        if (filter.from) o.from = filter.from
+        if (filter.to) o.to = filter.to
+        if (filter.event) o.event = filter.event
+        if (filter.q.trim()) o.q = filter.q.trim()
+        return o
+      }
+      const runFilter = async () => {
+        fileIdx.value = 0
+        activeTrace.value = null
+        try {
+          await window.store.loadLogFiles(buildQuery())
+          if (M.logFiles[0]) await window.store.loadLogEvents(M.logFiles[0].file)
+          Vue.nextTick(() => { activeTrace.value = traces.value[0]?.traceId })
+        } catch { /* 忽略 */ }
+      }
+      const resetFilter = () => { filter.from = ''; filter.to = ''; filter.event = ''; filter.q = ''; runFilter() }
+
       const expanded = ref({})
       const toggle = (i) => { expanded.value[i] = !expanded.value[i] }
 
@@ -99,7 +121,7 @@
         } catch { /* 忽略 */ }
       })
 
-      return { files, fileIdx, pickFile, traces, activeTrace, events, expanded, toggle, EV, summary, cachePct, fmt }
+      return { files, fileIdx, pickFile, traces, activeTrace, events, expanded, toggle, EV, summary, cachePct, fmt, filter, hitTotal, runFilter, resetFilter }
     },
     template: `
     <div class="grid cols-300" style="align-items:start">
@@ -108,6 +130,24 @@
         <div style="padding:15px 18px;border-bottom:1px solid var(--border)">
           <div class="card-title"><v-icon name="log"/>会话日志文件</div>
           <div class="card-sub">data/logs/ · 敏感度:高</div>
+          <!-- 筛选：默认最新10条；日期范围/事件类型/关键词任意组合 -->
+          <div class="flex gap6 wrap" style="margin-top:10px">
+            <input type="date" class="input" v-model="filter.from" style="width:auto"/>
+            <span class="muted-3">~</span>
+            <input type="date" class="input" v-model="filter.to" style="width:auto"/>
+          </div>
+          <div class="flex gap6 wrap" style="margin-top:6px">
+            <select class="select" v-model="filter.event" style="width:auto;min-width:108px">
+              <option value="">全部事件</option>
+              <option v-for="(meta, key) in EV" :key="key" :value="key">{{ meta.name }}</option>
+            </select>
+            <input class="input" v-model="filter.q" placeholder="关键词(时间/报错/工具名)" style="flex:1;min-width:120px"/>
+          </div>
+          <div class="flex gap6" style="margin-top:6px">
+            <button class="btn btn-primary" @click="runFilter" style="flex:1">查询</button>
+            <button class="btn btn-ghost" @click="resetFilter" style="flex:1">重置</button>
+          </div>
+          <div class="muted-3" style="margin-top:8px;font-size:11px">命中 {{ hitTotal }} 条 · 当前显示最新 {{ files.length }} 条</div>
         </div>
         <div v-for="(f, i) in files" :key="f.file" class="trace-item" :class="{active: fileIdx === i}" @click="pickFile(i)">
           <div style="font-weight:700;font-size:12.5px">{{ f.label }}</div>

@@ -78,6 +78,44 @@ export function readLogFile(dir, file) {
   return parseDevLog(fs.readFileSync(fp, 'utf8'))
 }
 
+/** YYYY-MM-DD → ms（当天 00:00:00 本地）；endOfDay=true 则 23:59:59.999。非法返 null。 */
+function parseDateDay(s, endOfDay = false) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim())
+  if (!m) return null
+  const t = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${endOfDay ? '23:59:59.999' : '00:00:00'}`)
+  return Number.isFinite(t) ? t : null
+}
+
+/**
+ * 按条件查询会话日志文件（默认最新 limit 个；日期/时间/事件任意组合，留空即不过滤）。
+ * - from/to：YYYY-MM-DD 日期范围（按文件名时间戳=会话开始时间）；
+ * - event：只保留「含该事件类型」的文件（扫文件内容，如 error/tool/run_end）；
+ * - q：关键词，模糊匹配文件内事件 JSON（可输入「3点」「报错」「工具名」等时间/内容片段）；
+ * - limit：默认 10（仅截断 items，不影响 total）。
+ * 返回 { items:[{file,label}], total }，total = 筛选后命中总数。
+ */
+export function queryLogFiles(dir, { from, to, event, q, limit = 10 } = {}) {
+  let files = listLogFiles(dir) // 已按 ts 倒序（最新在前）
+  const fromTs = parseDateDay(from, false)
+  const toTs = parseDateDay(to, true)
+  if (fromTs != null) files = files.filter((f) => f.ts >= fromTs)
+  if (toTs != null) files = files.filter((f) => f.ts <= toTs)
+  const ev = String(event || '').trim()
+  const kw = String(q || '').trim().toLowerCase()
+  if (ev || kw) {
+    files = files.filter((f) => {
+      const events = readLogFile(dir, f.file)
+      if (ev && !events.some((e) => e.event === ev)) return false
+      if (kw && !JSON.stringify(events).toLowerCase().includes(kw)) return false
+      return true
+    })
+  }
+  const total = files.length
+  const lim = Number.isFinite(+limit) && +limit > 0 ? Math.floor(+limit) : 10
+  const items = files.slice(0, lim).map((f) => ({ file: f.file, label: f.label }))
+  return { items, total }
+}
+
 /**
  * 聚合近 N 日 stats（供 /api/overview）：tokenTrend（按天 input/output）+ toolTop（工具计数 TopK）。
  * 仅扫文件名日期 >= since 的文件，避免全扫。
