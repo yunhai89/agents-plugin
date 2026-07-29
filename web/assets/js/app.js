@@ -45,12 +45,13 @@
       const route = ref((location.hash || '#/dashboard').slice(2))
       const valid = computed(() => !!window.VIEWS[route.value])
       if (!valid.value) route.value = 'dashboard'
+      const navOpen = ref(false) // 移动端抽屉
       window.addEventListener('hashchange', () => {
         const r = location.hash.slice(2)
         route.value = window.VIEWS[r] ? r : 'dashboard'
         window.scrollTo({ top: 0 })
       })
-      const go = (id) => { location.hash = '#/' + id }
+      const go = (id) => { location.hash = '#/' + id; navOpen.value = false }
       const view = computed(() => window.VIEWS[route.value])
       const title = computed(() => TITLES[route.value] || ['', ''])
 
@@ -75,7 +76,7 @@
         try { await window.store.loadScopes() } catch { /* 未登录或运行时未就绪，各页 load 时再处理 */ }
       })
 
-      return { route, go, view, title, NAV, loggedIn, loginInput, doLogin }
+      return { route, go, view, title, NAV, navOpen, loggedIn, loginInput, doLogin }
     },
     template: `
     <div v-if="!loggedIn" class="login-wrap">
@@ -88,14 +89,15 @@
       </div>
     </div>
     <div v-else class="layout">
-      <!-- 侧边栏 -->
-      <aside class="sidebar">
+      <!-- 侧边栏(移动端为抽屉) -->
+      <aside class="sidebar" :class="{open: navOpen}">
         <div class="side-brand">
           <div class="brand-mark"><v-icon name="bot"/></div>
           <div>
             <div class="brand-name">agents-plugin</div>
             <div class="brand-sub">AI Agents 管理面板</div>
           </div>
+          <button class="modal-x" style="margin-left:auto" @click="navOpen = false"><v-icon name="x"/></button>
         </div>
         <nav class="side-nav">
           <template v-for="g in NAV" :key="g.group">
@@ -108,10 +110,14 @@
         </nav>
         <div class="side-foot"><span class="dot"></span>TRSS-Yunzai · 插件运行中</div>
       </aside>
+      <Transition name="fade">
+        <div v-if="navOpen" class="side-backdrop" @click="navOpen = false"></div>
+      </Transition>
 
       <!-- 主区 -->
       <div class="main">
         <header class="topbar">
+          <button class="nav-burger" @click="navOpen = true"><v-icon name="menu"/></button>
           <div>
             <div class="topbar-title">{{ title[0] }}</div>
             <div class="topbar-sub">{{ title[1] }}</div>

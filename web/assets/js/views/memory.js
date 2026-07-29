@@ -77,7 +77,7 @@
         </div>
       </div>
 
-      <div class="grid mt16" style="grid-template-columns: 300px 1fr">
+      <div class="grid mt16 cols-300">
         <!-- 用量 -->
         <div class="card card-pad hoverable flex" style="--i:1;flex-direction:column;align-items:center;gap:14px">
           <ring-progress :percent="pct" :key="scopeId + tab">

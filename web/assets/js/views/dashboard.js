@@ -104,7 +104,7 @@
       </div>
 
       <!-- 图表区 -->
-      <div class="grid mt16" style="grid-template-columns: 1.7fr 1fr">
+      <div class="grid mt16 cols-wide">
         <div class="card card-pad hoverable" style="--i:5">
           <div class="flex between">
             <div>
@@ -155,7 +155,7 @@
       </div>
 
       <!-- 状态行 -->
-      <div class="grid mt16" style="grid-template-columns: 1.7fr 1fr">
+      <div class="grid mt16 cols-wide">
         <div class="card card-pad hoverable" style="--i:7">
           <div class="card-title"><v-icon name="config"/>功能开关速览</div>
           <div class="card-sub">当前生效配置一览(只读,修改请前往配置中心)</div>

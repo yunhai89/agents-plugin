@@ -44,7 +44,7 @@
       return { convs, activeId, conv, session, showReasoning, showArgs, toggleR, toggleA, parseArgs, fmt }
     },
     template: `
-    <div class="grid" style="grid-template-columns: 320px 1fr;align-items:start">
+    <div class="grid cols-320" style="align-items:start">
       <!-- 对话列表 -->
       <div class="card card-pad" style="--i:0">
         <div class="card-title mb10"><v-icon name="session"/>对话列表</div>
@@ -66,7 +66,7 @@
         <div class="flex between" style="padding:15px 20px;border-bottom:1px solid var(--border);background:var(--surface-2)">
           <div>
             <div style="font-weight:800;font-size:14px">{{ conv?.title }}</div>
-            <div class="muted-3 mono" style="font-size:11px">{{ session.key }}</div>
+            <div class="muted-3 mono ellipsis" style="font-size:11px">{{ session.key }}</div>
           </div>
           <span class="chip chip-teal"><v-icon name="user"/>{{ session.scopeUserId }}</span>
         </div>

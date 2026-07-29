@@ -24,6 +24,7 @@
       </div>
 
       <div class="card" style="--i:1;overflow:hidden">
+        <div class="tbl-wrap">
         <table class="tbl">
           <thead><tr><th style="width:220px">技能</th><th>描述</th><th style="width:90px">优先级</th><th style="width:90px">常驻</th><th style="width:220px">触发关键词</th></tr></thead>
           <tbody>
@@ -42,6 +43,7 @@
             </tr>
           </tbody>
         </table>
+        </div>
         <empty-state v-if="!filtered().length" icon="search" text="没有匹配的技能"/>
       </div>
 

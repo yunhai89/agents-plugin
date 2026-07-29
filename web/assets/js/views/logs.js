@@ -102,7 +102,7 @@
       return { files, fileIdx, pickFile, traces, activeTrace, events, expanded, toggle, EV, summary, cachePct, fmt }
     },
     template: `
-    <div class="grid" style="grid-template-columns: 300px 1fr;align-items:start">
+    <div class="grid cols-300" style="align-items:start">
       <!-- 会话文件 -->
       <div class="card" style="--i:0;overflow:hidden">
         <div style="padding:15px 18px;border-bottom:1px solid var(--border)">
@@ -141,7 +141,7 @@
                 <span class="chip" :style="{background: EV[e.event].bg, color: EV[e.event].color}">{{ e.event }}</span>
                 <b style="font-size:13px">{{ EV[e.event].name }}</b>
                 <span class="muted mono tl-summary" style="font-size:11px">{{ summary(e) }}</span>
-                <span class="muted-3 mono" style="margin-left:auto;font-size:11px;flex:0 0 auto">{{ fmt.time(e.time) }}</span>
+                <span class="muted-3 mono tl-time" style="margin-left:auto;font-size:11px;flex:0 0 auto">{{ fmt.time(e.time) }}</span>
                 <v-icon name="chevron" :style="{transform: expanded[i] ? 'rotate(180deg)' : '', transition: 'transform .25s', color: 'var(--text-3)', flex: '0 0 auto'}"/>
               </div>
               <Transition name="expand">

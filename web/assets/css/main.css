@@ -685,17 +685,103 @@ pre.code {
   animation: fadeUp .4s var(--ease) backwards; animation-delay: calc(var(--i) * 60ms);
 }
 
+/* 响应式辅助栅格(替代内联列宽,便于媒体查询覆盖) */
+.cols-wide { grid-template-columns: 1.7fr 1fr; }
+.cols-300 { grid-template-columns: 300px 1fr; }
+.cols-320 { grid-template-columns: 320px 1fr; }
+
+/* 汉堡按钮(仅移动端显示) */
+.nav-burger {
+  display: none; width: 38px; height: 38px; border-radius: 10px;
+  border: 1px solid var(--border-strong); background: var(--surface);
+  color: var(--text-2); cursor: pointer; place-items: center; flex: 0 0 38px;
+  transition: all var(--dur) var(--ease);
+}
+.nav-burger:active { transform: scale(.92); }
+.nav-burger svg { width: 18px; height: 18px; }
+.side-backdrop {
+  position: fixed; inset: 0; z-index: 80;
+  background: rgba(34, 48, 74, .38); backdrop-filter: blur(2px);
+}
+.tbl-wrap { overflow-x: auto; }
+.tbl-wrap .tbl { min-width: 720px; }
+
+/* 登录页(app.js 登录态) */
+.login-wrap {
+  min-height: 100vh; display: grid; place-items: center; padding: 20px;
+  background:
+    radial-gradient(600px 300px at 85% -5%, rgba(139, 92, 246, .12), transparent),
+    radial-gradient(500px 260px at 5% 100%, rgba(14, 165, 233, .1), transparent),
+    var(--bg);
+}
+.login-card {
+  width: 380px; max-width: 100%; padding: 34px 30px; text-align: center;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-xl); box-shadow: var(--shadow-lg);
+  animation: popIn .45s var(--ease);
+}
+.login-card .brand-mark { margin: 0 auto; }
+.login-card .input { margin-bottom: 12px; }
+.topbar-btn {
+  padding: 7px 14px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--surface); color: var(--text-2); font-size: 12.5px; font-weight: 700;
+  cursor: pointer; transition: all var(--dur) var(--ease);
+}
+.topbar-btn:hover { color: var(--rose); border-color: var(--rose); background: var(--rose-soft); }
+
 /* 响应式 */
 @media (max-width: 1100px) {
   .grid-4 { grid-template-columns: repeat(2, 1fr); }
   .grid-3 { grid-template-columns: repeat(2, 1fr); }
   .cfg-layout { grid-template-columns: 1fr; }
   .cfg-anchor { display: none; }
+  .cols-wide, .cols-300, .cols-320 { grid-template-columns: 1fr; }
 }
 @media (max-width: 860px) {
-  .sidebar { display: none; }
-  .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+  /* 侧边栏 → 抽屉 */
+  .sidebar {
+    display: flex; position: fixed; left: 0; top: 0; bottom: 0;
+    width: min(236px, 82vw); height: 100vh; height: 100dvh;
+    transform: translateX(-105%); transition: transform .34s var(--ease-out);
+    background: #fff; box-shadow: none; z-index: 90;
+  }
+  .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
+  .nav-burger { display: grid; }
+
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .page { padding: 18px 14px 64px; }
+  .topbar { padding: 12px 14px; gap: 10px; }
+  .topbar-title { font-size: 16px; }
+  .hero { padding: 22px 20px; }
+
+  /* 配置中心:条目纵向排布,控件全宽,杜绝挤压/溢出 */
   .cfg-grid { grid-template-columns: 1fr; }
-  .page { padding: 18px 16px 60px; }
-  .topbar { padding: 12px 16px; }
+  .cfg-item { flex-direction: column; align-items: stretch; gap: 10px; }
+  .cfg-item .ctl { max-width: 100%; width: 100%; }
+  .cfg-item .ctl .input, .cfg-item .ctl .select, .cfg-item .ctl .textarea { width: 100% !important; }
+  .cfg-item .ctl > div { width: 100%; flex-wrap: wrap; justify-content: flex-start !important; }
+  .cfg-item .ctl .switch { align-self: flex-end; }
+
+  /* iOS 输入聚焦防自动放大 */
+  .input, .select, .textarea { font-size: 16px; }
+
+  .diff-grid { grid-template-columns: 1fr; }
+  .cfg-savebar { flex-wrap: wrap; }
+  .cfg-savebar > div { margin-left: 0 !important; width: 100%; }
+  .cfg-savebar > div .btn { flex: 1; }
+  .overlay { padding: 12px; }
+  .modal-foot { flex-wrap: wrap; }
+  .modal-foot .btn { flex: 1; }
+  .toast-wrap { left: 12px; right: 12px; top: 12px; }
+  .toast { min-width: 0; max-width: none; width: 100%; }
+  .stat-value { overflow-wrap: anywhere; }
+}
+@media (max-width: 560px) {
+  .tl-time { display: none; }
+  .topbar-sub { display: none; }
+  .hero h2 { font-size: 18px; }
+  .bubble { max-width: 86%; }
+  .chat-pane { padding: 14px; }
+  .mock-badge { font-size: 10.5px; padding: 3px 8px; }
 }
