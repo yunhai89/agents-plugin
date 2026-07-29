@@ -31,3 +31,6 @@ config/config.yaml.tmp
 # 用户截图（不入库）
 Screenshot_*.jpg
 Screenshot_*.png
+
+# 临时排查截图不入库
+图*.jpg

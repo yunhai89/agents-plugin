@@ -102,20 +102,8 @@ export async function handleAgentsLogin(e) {
   const host = await resolveHost(cfg)
   const token = issueToken(e.user_id)
   const url = `http://${host}:${port}/?token=${token}`
-  const isPrivate = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|::1$)/.test(host)
-  Log.mark(`[web] master ${e.user_id} 登录面板`)
-  const lines = [
-    '🌐 agents-plugin 管理面板（24h 有效，仅你可访问，请勿转发）：',
-    url,
-  ]
-  if (isPrivate) {
-    // 服务器自己拿不到公网 IP（NAT/弹性 IP），内网地址外网不可达 → 提示用户配 publicUrl
-    lines.push(`⚠️ 上面是服务器内网地址，外网/手机无法直接访问。远程访问请在 config.yaml 配：`)
-    lines.push(`   agent.webApi.publicUrl: "http://你的公网IP:${port}"`)
-    lines.push(`   保存后 #agents重载，再重新 #agents登录 即得公网地址。本机访问可直接用上面地址或 SSH 端口转发。`)
-  } else {
-    lines.push(`访问前提：服务器端口 ${port} 需对访问端放行（安全组/防火墙）。`)
-  }
-  await e.reply(lines.join('\n'))
+  Log.mark(`[web] master ${e.user_id} 登录面板（host=${host}）`)
+  // 地址单独发送（参考锅巴 #锅巴登录）：公网 IP 由代码自动探测，不依赖配置文件
+  await e.reply(url)
   return true
 }
