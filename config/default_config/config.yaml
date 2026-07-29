@@ -180,3 +180,7 @@ agent:
     mounts: []                 # 主机目录挂载到沙盒（如 ["/root/Yunzai/plugins/agents-plugin/data/temp:/data:ro"]）；默认空=不挂(最安全)
     blocklist: []
     allowlist: []          # 只读安全命令正则集（空=用默认 ls/cat/grep/git status 等；命中且无重定向时免审批）
+  webApi:
+    enable: true           # Web 管理面板（独立 HTTP 服务，脱离锅巴）：主人私聊发 #agents登录 取得带 token 的访问地址（24h 有效）
+    port: 6098             # 监听端口（0.0.0.0）；默认避开 Yunzai 2536 / 锅巴 6099
+    publicUrl: ""          # 对外访问地址（留空自动探测本机 LAN IP；填 http://1.2.3.4:6098 覆盖）

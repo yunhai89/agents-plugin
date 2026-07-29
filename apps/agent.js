@@ -713,7 +713,7 @@ function notifyMaster(e, id, info) {
   }
 }
 
-async function fireReminder(info) {
+export async function fireReminder(info) {
   try {
     const bot = (typeof Bot !== 'undefined' && (Bot[info.selfId] || Bot)) || null
     const text = `⏰ 提醒：${info.message}`

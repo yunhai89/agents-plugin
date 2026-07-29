@@ -225,6 +225,15 @@ export class RecallStore {
     return all.length - next.length
   }
 
+  /** 按 id 精确删除单条（Web 面板用；forget 只能按 keyword 模糊删） */
+  async removeById(userId, entryId) {
+    const all = await this._all(userId)
+    const next = all.filter((m) => m.id !== entryId)
+    if (next.length === all.length) return 0
+    await this._save(userId, next)
+    return 1
+  }
+
   async clearAll(userId) { await this.kv.del(this._key(userId)) }
   async listByUser(userId) { return this._all(userId) }
 

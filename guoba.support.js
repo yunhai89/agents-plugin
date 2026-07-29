@@ -13,18 +13,9 @@
  */
 import Config from './utils/Config.js'
 import Log from './utils/Log.js'
+import { setPath } from './utils/path.js'
 
-/** 按点路径写入嵌套对象（不引 lodash） */
-function setPath(obj, path, value) {
-  const keys = String(path).split('.')
-  let cur = obj
-  for (let i = 0; i < keys.length - 1; i++) {
-    const k = keys[i]
-    if (typeof cur[k] !== 'object' || cur[k] === null) cur[k] = {}
-    cur = cur[k]
-  }
-  cur[keys[keys.length - 1]] = value
-}
+/** setPath 已提取到 utils/path.js（web 路由与 guoba 共用） */
 
 /** 解包 { mcpServers: {...} }（用户常贴 Claude Desktop 标准包装） */
 function unwrapServers(s) {
@@ -102,6 +93,12 @@ export function supportGuoba() {
         { field: 'agent.systemPrompt', label: '默认身份 systemPrompt', bottomHelpMessage: '留空用富默认身份；被人设覆盖时失效', component: 'InputTextArea' },
 
         // —— 模型 ——
+        // —— Web 管理面板（独立 HTTP 服务，脱离锅巴）——
+        { label: 'Web 管理面板', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.webApi.enable', label: '启用 Web 面板', bottomHelpMessage: '独立 HTTP 服务；主人私聊 #agents登录 取带 token 的访问地址（24h 有效）', component: 'Switch' },
+        { field: 'agent.webApi.port', label: '面板端口', bottomHelpMessage: '监听 0.0.0.0；默认 6098（避开 Yunzai 2536 / 锅巴 6099）', component: 'InputNumber', componentProps: { min: 1, max: 65535 } },
+        { field: 'agent.webApi.publicUrl', label: '对外地址(可选)', bottomHelpMessage: '留空自动探测本机 LAN IP；填 http://1.2.3.4:6098 覆盖', component: 'Input', componentProps: { placeholder: '留空=自动探测' } },
+
         { label: '模型与对话', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.protocol', label: '协议', component: 'Select', componentProps: { options: OPT.protocol } },
         { field: 'agent.preset', label: '厂商预设', bottomHelpMessage: '自动填 baseURL/headers/字段映射', component: 'Select', componentProps: { options: OPT.preset } },

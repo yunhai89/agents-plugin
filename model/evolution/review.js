@@ -220,3 +220,65 @@ export function removeSuggestion(suggestionDir, scopeId, id) {
   const file = path.join(suggestionDir, String(scopeId || '__global__'), `${id}.json`)
   try { fs.unlinkSync(file); return true } catch { return false }
 }
+
+/**
+ * 应用一条 suggestion（Web 面板 #apply 与命令行 #采纳 共用，避免逻辑漂移）。
+ * prompt → 改 promptRegistry + 落盘；memory → memory.add/replace/remove；skill → 无自动（提示手工）。
+ * 应用后从待审列表移除。失败抛错（路由层置 apply_failed）。
+ * @param {object} rt getRuntime() 返回值（需 promptRegistry/memory/promptDir/suggestionDir）
+ * @param {object} s suggestion（须含 scopeId/id/kind/action/target/payload[/newPayload]）
+ */
+export async function applySuggestion(rt, s) {
+  if (!s || !s.scopeId) throw new Error('suggestion 缺少 scopeId')
+  if (s.kind === 'prompt') {
+    const key = s.target || 'agent'
+    const tpl = rt.promptRegistry && rt.promptRegistry.get(key)
+    if (!tpl) throw new Error(`未找到 prompt 模板：${key}`)
+    const oldSystem = tpl.system
+    tpl.system = String(s.payload || '')
+    if (typeof tpl.addChange === 'function') tpl.addChange(`${tpl.version || '1.0.0'}-evolved`, `采纳：${String(s.rationale || '').slice(0, 50)}`)
+    try { fs.writeFileSync(path.join(rt.promptDir, `${key}.json`), JSON.stringify(tpl.toJSON(), null, 2)) }
+    catch (e) { throw new Error(`prompt 落盘失败：${e?.message || e}`) }
+    removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
+    return { ok: true, note: `prompt「${key}」已应用（旧：${String(oldSystem).slice(0, 40)}…）` }
+  }
+  if (s.kind === 'memory') {
+    if (!rt.memory) throw new Error('memory 未就绪')
+    const target = s.target === 'user' ? 'user' : 'memory'
+    if (s.action === 'remove') rt.memory.remove(target, String(s.payload || ''), s.scopeId)
+    else if (s.action === 'replace') rt.memory.replace(target, String(s.payload || ''), String(s.newPayload || s.payload || ''), s.scopeId)
+    else rt.memory.add(target, String(s.payload || ''), s.scopeId)
+    removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
+    return { ok: true, note: `memory ${s.action} 已应用` }
+  }
+  // skill 类：无自动应用机制，仅移出待审
+  removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
+  return { ok: true, note: 'skill suggestion 需手工编辑 skills/（已移出待审）' }
+}
+
+/**
+ * 读取全部 suggestion（跨 scope 子目录，按 status 过滤；供 Web 面板）。
+ * 与 listPendingSuggestions 区别：本函数跨 scope、含全部 status（pending/applied/apply_failed）。
+ */
+export function listAllSuggestions(suggestionDir, { scopeId, status } = {}) {
+  const out = []
+  try {
+    if (!fs.existsSync(suggestionDir)) return []
+    const scopes = scopeId
+      ? [String(scopeId)]
+      : fs.readdirSync(suggestionDir).filter((d) => { try { return fs.statSync(path.join(suggestionDir, d)).isDirectory() } catch { return false } })
+    for (const sc of scopes) {
+      const dir = path.join(suggestionDir, sc)
+      if (!fs.existsSync(dir)) continue
+      for (const f of fs.readdirSync(dir)) {
+        if (!f.endsWith('.json')) continue
+        try {
+          const s = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))
+          if (status && s.status !== status) continue
+          out.push(s)
+        } catch { /* 跳过损坏文件 */ }
+      }
+    }
+  } catch { /* noop */ }
+  return out.sort((a, b) => (b.ts || 0) - (a.ts || 0))
+}

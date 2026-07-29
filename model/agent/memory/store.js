@@ -252,6 +252,14 @@ export class MemoryStore {
     return this._commit(target, scopeId, applyOp(this._getScope(scopeId).state[target], { action: 'remove', old_text: oldText }))
   }
 
+  /** 全量替换条目（Web 面板用）：超限抛 MemoryLimitError（_commit 内检查） */
+  setAll(target, entries, scopeId) {
+    this._ensure(target)
+    if (!Array.isArray(entries)) throw new Error('entries 必须是字符串数组')
+    const arr = entries.map((e) => String(e))
+    return this._commit(target, scopeId, arr)
+  }
+
   /** 原子批量：在一份数组上顺序应用全部 op，全部成功且不超限才提交（否则不改动） */
   batch(target, operations, scopeId) {
     this._ensure(target)
