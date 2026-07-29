@@ -10,5 +10,7 @@ export { validateManifest, isGenerationAllowed, makeManifest, NAME_RE, SEMVER_RE
 export { seedBuiltinTools } from './seed.js'
 export { ToolSynthesizer } from './synthesizer.js'
 export { default as verifyStatic, scanSource } from './verifier/static.js'
+export { runCandidate } from './sandbox.js'
+export { verifyBehavior } from './verifier/behavior.js'
 export { EvolutionEngine } from './engine.js'
 export * as lifecycle from './lifecycle.js'

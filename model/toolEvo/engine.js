@@ -8,6 +8,7 @@
  */
 import crypto from 'node:crypto'
 import { verifyStatic } from './verifier/static.js'
+import { verifyBehavior } from './verifier/behavior.js'
 
 export class EvolutionEngine {
   constructor({ synthesizer, registry, logger = () => {} }) {
@@ -49,8 +50,18 @@ export class EvolutionEngine {
         toolId: tid, semver: manifest.version, manifest, source, tests,
         parentVersionId, generatorModel: this.synthesizer.model,
       })
-      this.logger('mark', `[toolEvo] 候选注册 ${manifest.name}@${manifest.version} → draft（待阶段2 行为验证 + 审批）`)
-      return { ok: true, versionId: v.id, status: 'draft', assumptions, name: manifest.name, version: manifest.version }
+      this.logger('mark', `[toolEvo] 候选注册 ${manifest.name}@${manifest.version} → draft，开始行为验证（沙箱跑 tests）`)
+      // 行为验证：跑候选 tests + 断言 + 性能/超时门（AST 已过，沙箱兜底运行时行为）
+      const bv = await verifyBehavior({ source, tests, timeoutMs: 3000 })
+      if (bv.passed) {
+        await this.registry.setStatus(v.id, 'verified', { actor: 'engine', reason: `行为验证 ${bv.evidence.passed}/${bv.evidence.totalTests} 通过，avgMs=${bv.evidence.avgMs}` })
+        this.logger('mark', `[toolEvo] ${manifest.name}@${manifest.version} → verified（${bv.evidence.passed}/${bv.evidence.totalTests} tests，avg ${bv.evidence.avgMs}ms）`)
+        return { ok: true, versionId: v.id, status: 'verified', evidence: bv.evidence, assumptions, name: manifest.name, version: manifest.version }
+      }
+      const failReasons = bv.results.filter((r) => !r.passed).map((r) => r.reason).join('; ')
+      await this.registry.setStatus(v.id, 'rejected', { actor: 'engine', reason: '行为验证失败：' + failReasons })
+      this.logger('warn', `[toolEvo] ${manifest.name}@${manifest.version} 行为验证失败 → rejected：${failReasons}`)
+      return { ok: false, status: 'rejected', reason: '行为验证失败：' + failReasons, evidence: bv.evidence }
     } catch (e) {
       return { ok: false, status: 'rejected', reason: '注册失败：' + (e?.message || e) }
     }
