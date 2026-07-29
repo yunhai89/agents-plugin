@@ -58,12 +58,38 @@ export function detectLanIp() {
   return '127.0.0.1'
 }
 
-function resolveHost(cfg) {
+/** 自动探测公网出口 IP（云服务器经 NAT，自不知公网 IP；调外部 API 获取）。10 分钟缓存。 */
+let _publicIp = null
+let _publicIpAt = 0
+const PRIVATE_RE = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.)/
+async function detectPublicIp() {
+  if (_publicIp && Date.now() - _publicIpAt < 600000) return _publicIp
+  const apis = ['https://4.ipw.cn', 'https://api.ipify.org', 'https://ifconfig.me/ip']
+  for (const url of apis) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(3000), headers: { 'User-Agent': 'curl/8' } })
+      if (!r.ok) continue
+      const ip = (await r.text()).trim()
+      // 必须是合法公网 IPv4（排除私网/回环，防 API 返回内网代理地址）
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && !PRIVATE_RE.test(ip)) {
+        _publicIp = ip
+        _publicIpAt = Date.now()
+        return ip
+      }
+    } catch { /* 超时 / 无外网 → 试下一个 */ }
+  }
+  return null
+}
+
+/** 解析对外 host：publicUrl（用户配）> 自动探测公网 IP > 内网 IP 兜底 */
+async function resolveHost(cfg) {
   const pu = cfg?.publicUrl || ''
   if (pu) {
     const h = pu.replace(/^https?:\/\//, '').replace(/[\/:].*$/, '')
     if (h) return h
   }
+  const pub = await detectPublicIp()
+  if (pub) return pub
   return detectLanIp()
 }
 
@@ -73,14 +99,23 @@ export async function handleAgentsLogin(e) {
   if (cfg.enable === false) { await e.reply('Web 面板未启用（config: agent.webApi.enable）'); return true }
   if (e.isGroup) { await e.reply('为安全，请在私聊对我发送 #agents登录'); return true }
   const port = cfg.port || 6098
-  const host = resolveHost(cfg)
+  const host = await resolveHost(cfg)
   const token = issueToken(e.user_id)
   const url = `http://${host}:${port}/?token=${token}`
+  const isPrivate = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|::1$)/.test(host)
   Log.mark(`[web] master ${e.user_id} 登录面板`)
-  await e.reply([
+  const lines = [
     '🌐 agents-plugin 管理面板（24h 有效，仅你可访问，请勿转发）：',
     url,
-    `访问前提：服务器端口 ${port} 需对访问端放行（安全组/防火墙）。`,
-  ].join('\n'))
+  ]
+  if (isPrivate) {
+    // 服务器自己拿不到公网 IP（NAT/弹性 IP），内网地址外网不可达 → 提示用户配 publicUrl
+    lines.push(`⚠️ 上面是服务器内网地址，外网/手机无法直接访问。远程访问请在 config.yaml 配：`)
+    lines.push(`   agent.webApi.publicUrl: "http://你的公网IP:${port}"`)
+    lines.push(`   保存后 #agents重载，再重新 #agents登录 即得公网地址。本机访问可直接用上面地址或 SSH 端口转发。`)
+  } else {
+    lines.push(`访问前提：服务器端口 ${port} 需对访问端放行（安全组/防火墙）。`)
+  }
+  await e.reply(lines.join('\n'))
   return true
 }
