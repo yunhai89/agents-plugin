@@ -560,6 +560,9 @@ async function buildRuntime() {
       let stableCount = 0
       try {
         for (const s of await toolEvoRegistry.listStable()) {
+          // 内置工具(provenance=human)由插件代码注册,不走制品注入(其 source 为空,execute 在插件代码);
+          // 只注入进化产出(generated/refined,制品含 export run)
+          if (s.manifest?.provenance?.kind === 'human') continue
           try { tools.register(await toolEvoRegistry.toToolContract(s)); stableCount++ } catch (e) { Log.warn('[toolEvo] 注入 stable 失败', s.name, e?.message || e) }
         }
       } catch (e) { Log.warn('[toolEvo] stable 注入失败', e?.message || e) }
