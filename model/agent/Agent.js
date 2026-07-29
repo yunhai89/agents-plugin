@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { ExecutionContext } from './tools/context.js'
 import { makeToolSearchTool } from './tools/tool_search.js'
 import { stringifyArgs, estimateMessages, mergeUsage } from './messages.js'
+import { tokenBreakdown, toolResultFields } from './trace/events.js'
 import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildToolDiscoverySection, buildSkillsPromptSection, buildStickerPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
 
 const DEFAULT_IDENTITY = TEMPLATES.agent.system
@@ -214,7 +215,7 @@ export class Agent {
     while (turns < this.maxTurns) {
       if (signal?.aborted) throw new Error('aborted')
 
-      const system = this._assembleSystem(memories, systemPromptOverride, context, scopeId)
+      const { system, breakdown } = this._assembleSystem(memories, systemPromptOverride, context, scopeId)
 
       if (this.contextPressureThreshold) {
         const est = this._estimateHistory(system)
@@ -227,6 +228,8 @@ export class Agent {
       }
 
       const toolList = this._buildToolList() // 每轮重算：tool_search 命中后 activeTools 扩充，下轮须重新合成
+      const __toolListTokens = estimateMessages(toolList.map((t) => ({ content: JSON.stringify({ n: t.name, d: t.description, p: t.parameters }) })))
+      breakdown.tools += __toolListTokens; breakdown.total = (breakdown.total || 0) + __toolListTokens
       const __t0 = Date.now()
       // 主模型失败时依次尝试回退 provider（各自独立 baseURL/apiKey/protocol，可跨厂商）
       const __chatWith = (prov, m) => prov.chat({
@@ -251,7 +254,7 @@ export class Agent {
         turn: turns, finish: result.finishReason, contentLen: (result.content || '').length,
         content: result.content || '', reasoning: !!result.reasoning,
         toolCalls: (result.toolCalls || []).map((tc) => ({ name: tc.name, arguments: tc.arguments })),
-        usage: result.usage || null, ms: __ms, toolsSent: toolList.length, ...(discoveryOn ? { activeTotal: this.activeTools.size } : {}),
+        usage: result.usage || null, ms: __ms, toolsSent: toolList.length, breakdown, ...(discoveryOn ? { activeTotal: this.activeTools.size } : {}),
       }, taskId, ctx?.devScope)
 
       // 防 API 报错："assistant message content or tool_calls must be set"
@@ -394,7 +397,7 @@ export class Agent {
     // 声明式记忆按 scopeId 隔离（每群每用户各自一份 MEMORY.md/USER.md）
     const memorySnapshot = this.memory ? (this.memory.snapshotAll(scopeId) || '') : ''
     const guardHardening = this.guard ? (this.guard.systemHardening() || '') : ''
-    return buildAgentSystemPrompt({
+    const system = buildAgentSystemPrompt({
       identity,
       serviceDirective: SERVICE_DIRECTIVE,
       toolCatalog,
@@ -405,6 +408,14 @@ export class Agent {
       context,
       guardHardening,
     })
+    // token 分段估算（供 token_breakdown；toolListTokens 在 run 处每轮补，因 _assembleSystem 早于 toolList 合成）
+    const breakdown = tokenBreakdown({
+      identity, service: SERVICE_DIRECTIVE, context: context || '', guard: guardHardening,
+      toolCatalog, toolListTokens: 0,
+      recalledMemory, memorySnapshot, skills: skillsSection, sticker: stickerSection,
+      conversationTokens: this._estimateMessagesTokens(),
+    }, this.estimateTokens)
+    return { system, breakdown }
   }
 
   /**
@@ -574,7 +585,12 @@ export class Agent {
       try { const o = JSON.parse(content); o._hint = TOOL_FAIL_HINT; content = JSON.stringify(o) }
       catch { content = content + '\n' + TOOL_FAIL_HINT } // 非 JSON 结果才回退追加
     }
-    this.devLog?.('tool', { name: tc.name, args: tc.arguments, ok: !isToolError(content), result: content, ms: Date.now() - __t }, execCtx.taskId, ctx?.devScope)
+    const __toolOk = !isToolError(content)
+    const __toolMs = Date.now() - __t
+    this.devLog?.('tool', {
+      name: tc.name, args: tc.arguments, ok: __toolOk, result: content, ms: __toolMs,
+      ...toolResultFields({ name: tc.name, ok: __toolOk, ms: __toolMs, result: content }),
+    }, execCtx.taskId, ctx?.devScope)
     cb.onToolEnd?.(tc, content)
     return { role: 'tool', tool_call_id: tc.id, name: tc.name, content: this._capToolResult(content, tool) }
   }

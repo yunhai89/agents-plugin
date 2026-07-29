@@ -152,6 +152,13 @@ export function supportGuoba() {
         { field: 'agent.selfReview.autoApplyPrompt', label: 'prompt 自动应用【不建议】', bottomHelpMessage: 'prompt/技能类自动应用；默认关（落盘待审，#审阅进化 人工把关）', component: 'Switch' },
         { field: 'agent.selfReview.dailyBudgetTokens', label: '日 token 预算', bottomHelpMessage: '自评审日预算上限，耗尽则只采迹不评审', component: 'InputNumber', componentProps: { min: 0, step: 10000 } },
 
+        // —— 工具进化（Tool Evolution）——
+        { label: '工具进化（Tool Evolution）', component: 'SOFT_GROUP_BEGIN' },
+        { field: 'agent.toolEvo.enable', label: '工具进化', bottomHelpMessage: '版本化工具库：生成→AST/沙箱验证→审批→晋升；默认开', component: 'Switch' },
+        { field: 'agent.toolEvo.maxRepairAttempts', label: '候选修复次数', bottomHelpMessage: '候选生成失败自动修复上限（建议≤2，防把安全限制修掉）', component: 'InputNumber', componentProps: { min: 0, max: 3 } },
+        { field: 'agent.toolEvo.retrievalThreshold', label: '检索接受阈值', bottomHelpMessage: '与去重阈值分开（§12.1）', component: 'InputNumber', componentProps: { min: 0, max: 1, step: 0.01 } },
+        { field: 'agent.toolEvo.deduplicationThreshold', label: '去重阈值', bottomHelpMessage: '候选去重相似度阈值', component: 'InputNumber', componentProps: { min: 0, max: 1, step: 0.01 } },
+
         // —— 深度思考 ——
         { label: '深度思考（Thinking）', component: 'SOFT_GROUP_BEGIN' },
         { field: 'agent.thinking.enable', label: '开启深度思考', bottomHelpMessage: 'Anthropic 等支持的扩展思考：模型先思考再作答（更慢、更耗 token，但复杂问题质量更高）', component: 'Switch' },

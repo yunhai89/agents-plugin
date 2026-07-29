@@ -202,6 +202,7 @@ export default {
     logs: path.join(PLUGIN_DIR, 'data', 'logs'),
     memories: path.join(PLUGIN_DIR, 'data', 'memories'),
     personas: path.join(PLUGIN_DIR, 'data', 'personas'),
+    evolution: path.join(PLUGIN_DIR, 'data', 'evolution'),
   },
   get: () => _data,
   set: (key, value) => { _data[key] = value },

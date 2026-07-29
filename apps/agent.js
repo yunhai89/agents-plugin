@@ -541,6 +541,24 @@ async function buildRuntime() {
     } catch (e) { Log.warn('[evolution] SelfReviewer 初始化失败', e?.message || e) }
   }
 
+  // —— Tool Evolution：版本化工具库 + 调用埋点（动态 import；sqlite3 未装/未启用则降级，不影响主流程）——
+  let toolEvo = null
+  if (cfg.toolEvo?.enable !== false) {
+    try {
+      const te = await import('../model/toolEvo/index.js')
+      await te.initDb({ dir: path.resolve(PLUGIN_ROOT, path.dirname(cfg.toolEvo?.dbPath || 'data/evolution/tevo.db')) })
+      const toolEvoRegistry = new te.ToolEvoRegistry({ artifactsDir: path.resolve(PLUGIN_ROOT, cfg.toolEvo?.artifactsDir || 'data/evolution/tools') })
+      tools.setInvocationSink(te.recordInvocation)
+      const builtins = tools.list().filter((t) => !t.meta?.mcp).map((t) => ({
+        name: t.name, description: t.description, parameters: t.parameters,
+        sideEffects: t.meta?.sideEffects || ['none'], tags: ['builtin'],
+      }))
+      const seeded = await te.seedBuiltinTools(toolEvoRegistry, builtins).catch((e) => { Log.warn('[toolEvo] seed 失败', e?.message || e); return 0 })
+      toolEvo = { registry: toolEvoRegistry, closeDb: te.closeDb, flushNow: te.flushNow }
+      Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具）`)
+    } catch (e) { Log.warn('[toolEvo] 初始化失败（sqlite3 未装？）', e?.message || e) }
+  }
+
   const agentConfig = {
     provider,
     model: cfg.model,
@@ -614,7 +632,7 @@ async function buildRuntime() {
     }
   }
 
-  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K, promptRegistry, traceStore, selfReview, promptDir, suggestionDir }
+  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K, promptRegistry, traceStore, selfReview, promptDir, suggestionDir, toolEvo }
 }
 
 async function getRuntime() {
@@ -635,6 +653,7 @@ async function getRuntime() {
 
 /** 失效运行时单例（下一次 getRuntime 用新配置重建） */
 function invalidateRuntime() {
+  if (_runtime?.toolEvo) { try { _runtime.toolEvo.closeDb() } catch { /* noop */ } }
   _runtime = null
   _runtimePromise = null
   _runtimeFailed = null  // 配置已变更：清失败缓存，下次 getRuntime 用新配置重试

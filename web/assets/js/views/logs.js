@@ -95,9 +95,14 @@
           case 'media': return e.files?.length ? `${e.files.length} 个附件:${e.files.map((f) => f.name).join(', ')}` : '无附件'
           case 'input': return `${e.inputKind} · caps vision=${e.caps.vision} file=${e.caps.file}`
           case 'run_start': return `${e.model} · 常驻工具 ${e.toolsSent} 个 ≈${e.toolsTokensEst} tok · maxTurns=${e.maxTurns}`
-          case 'turn': return `第 ${e.turn} 轮 · finish=${e.finish} · ${e.usage.prompt_tokens}+${e.usage.completion_tokens} tok · ${e.ms}ms`
-          case 'tool': return `${e.name} · ${e.ok ? '成功' : '失败'} · ${e.ms}ms`
-          case 'tool_discovery': return `命中 ${e.hits.map((h) => h.name).join('/')} · 激活 [${e.activated.join(', ')}]`
+          case 'turn': {
+            const u = e.usage || {}
+            const b = e.breakdown
+            const dist = b ? ` · 分布 身份${b.identity}/工具${b.tools}/记忆${b.memory}/技能${b.skills}/对话${b.conversation}` : ''
+            return `第 ${e.turn} 轮 · finish=${e.finish} · ${(u.prompt_tokens||0)}+${(u.completion_tokens||0)} tok${dist} · ${e.ms}ms`
+          }
+          case 'tool': return `${e.name} · ${e.success ? '✓' : '✗'}${e.errorClass ? ' ' + e.errorClass : ''} · ${e.duration ?? e.ms}ms${e.summary ? ' · ' + e.summary : ''}`
+          case 'tool_discovery': return `检索「${e.query}」· 命中 ${e.availableCount ?? (e.hits?.length || 0)} · 激活 [${(e.activated||[]).join(', ')}]${e.rejected?.length ? ' · 淘汰 ' + e.rejected.length : ''}`
           case 'reflect': return e.revise ? `需修正:${e.feedback}` : `通过:${e.feedback}`
           case 'recall_extract': return `scopeUser=${e.scopeUserId} · LLM=${e.hasLlm} · ${e.ms}ms`
           case 'run_end': return `${e.turns} 轮 · stop=${e.stopReason} · 总 ${e.usage.total} tok · ${fmt.dur(e.totalMs)}`

@@ -64,6 +64,14 @@ agent:
     traceDir: "data/evolution/traces"           # 对话轨迹存储（供离线 GEPA + 在线自评审消费）
     promptDir: "data/evolution/prompts"         # 进化产出的 prompt 覆盖（加载时覆盖内置 TEMPLATES）
     suggestionDir: "data/evolution/suggestions"  # 自评审 suggestion 落盘（按 scope 隔离）
+  toolEvo:                                       # Tool Evolution（工具进化）：可验证/可回滚/权限不可自扩的工具生命周期
+    enable: true                                  # 总开关（关闭则不初始化 DB、不埋点、不注入进化工具）
+    dbPath: "data/evolution/tevo.db"              # sqlite 库（工具/版本/调用/审计）
+    artifactsDir: "data/evolution/tools"          # 工具制品（TOOL.md/index.js/manifest.json/tests.json）
+    maxRepairAttempts: 2                          # 候选生成失败自动修复上限（文档 §13）
+    retrievalThreshold: 0.78                      # 检索接受阈值（§12.1，与去重阈值分开）
+    deduplicationThreshold: 0.88                  # 去重阈值
+    autoPromoteSideEffects: ["none"]              # 仅 none 副作用可自动晋升；read/write/message/delete 必人工审批
   systemPrompt:
   chatPermission: master
   masterSkipConfirm: false   # 主人发起的任务免确认直执行（高危！仅主人；denylist 仍拦）。开启后主人命令不再 #确认，但会发高危提示

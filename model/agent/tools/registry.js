@@ -39,6 +39,7 @@ export class ToolRegistry {
     this._index = null // 工具检索索引（懒构建）
     this._indexDirty = true // register/unregister/setEmbedFn 置脏 → search 时重建
     this._embedFn = null // 可选 embedding 函数（apps 注入；留空 = 纯关键词 jaccard）
+    this._invSink = null // 可选调用埋点（toolEvo 注入 recordInvocation；留空 = 不持久化）
   }
 
   /** 注入 embedding 函数（apps 用；留空 = 纯关键词 jaccard 检索）。切换会重建索引。 */
@@ -51,6 +52,12 @@ export class ToolRegistry {
   /** 注入日志器（AOP 切面用它打印） */
   setLogger(logger) {
     this.logger = logger || (() => {})
+    return this
+  }
+
+  /** 注入调用埋点（toolEvo recordInjection；留空 = 不持久化 tool_invocations）。核心模块不静态依赖 toolEvo。 */
+  setInvocationSink(fn) {
+    this._invSink = typeof fn === 'function' ? fn : null
     return this
   }
 
@@ -86,20 +93,24 @@ export class ToolRegistry {
         const t0 = Date.now()
         if (isMcp) lg('info', `调用 ${name}`, '参数=', brief(params))
         else self.logger('debug', 'tool call', name, 'args=', brief(params))
+        const sink = (extra) => { if (self._invSink) self._invSink({ versionId: meta.toolEvoVersionId || null, toolName: name, args: params, ...extra }) }
         try {
           const r = await orig.call(this, params, ctx)
           const ms = Date.now() - t0
           if (isErrorShape(r)) {
-            // 软失败：返回 {error}/{ok:false}（大量工具的报错方式）→ warn 确保可见
             ;(isMcp ? lg : self.logger)('warn', 'tool failed', name, brief(r.error != null ? r.error : r, 200), 'args=', brief(params))
+            sink({ success: false, latencyMs: ms, errorClass: 'soft_fail' })
           } else if (isMcp) {
             lg('info', `完成 ${name}`, `耗时=${ms}ms`)
+            sink({ success: true, latencyMs: ms })
           } else {
             self.logger('debug', 'tool done', name, `ms=${ms}`, 'preview=', brief(r, 140))
+            sink({ success: true, latencyMs: ms })
           }
           return r
         } catch (e) {
           lg('warn', 'tool error', name, e?.message || e, 'args=', brief(params))
+          sink({ success: false, latencyMs: Date.now() - t0, errorClass: e?.name || 'Error' })
           throw e
         }
       },

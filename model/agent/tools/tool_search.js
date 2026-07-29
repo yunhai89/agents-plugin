@@ -14,6 +14,8 @@
  * 参考 makeSkillTool 范式（skill/index.js），但返回结构化"工具速查 + 激活名"而非指令文本。
  */
 
+import { decisionFields } from '../trace/events.js'
+
 const CATEGORY_ORDER = ['query', 'personal', 'message', 'group_manage', 'system']
 const CATEGORY_LABELS = { query: '查询', personal: '个人', message: '消息', group_manage: '群管', system: '系统' }
 
@@ -69,6 +71,12 @@ export function makeToolSearchTool(registry, agent, cfg = {}) {
         activated: fresh.map((h) => h.name),
         alreadyActive: already.map((h) => h.name),
         activeTotal: active.size,
+        ...decisionFields({
+          query: q,
+          available: hits.map((h) => ({ name: h.name, score: h.score })),
+          selected: [...fresh, ...already].map((h) => h.name),
+          threshold: cfg.minScore ?? 0.3,
+        }),
       }, agent._curTaskId, ctx?.devScope || agent._curDevScope)
 
       if (!fresh.length && !already.length) {

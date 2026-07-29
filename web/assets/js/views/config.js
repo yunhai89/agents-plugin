@@ -74,17 +74,17 @@
         dirtySuppressed = true
         Object.assign(form, snap)
         origSnapshot = JSON.parse(JSON.stringify(snap))
+        mcpServersToUi()
         dirty.value = false
         nextTick(() => { dirtySuppressed = false })
       }
 
-      /* 点路径 diff:敏感字段(MaskedValue {configured,preview})仅当用户改成明文/__plain 才产出 */
+      /* 点路径 diff:全部字段明文,对象递归、数组/标量整体比较;MCP servers 整体提交(增删改不递归,避免删 server 漏掉) */
       const buildChanges = (orig, frm, prefix = 'agent', out = {}) => {
         for (const k of Object.keys(frm)) {
           const p = prefix + '.' + k, a = orig?.[k], b = frm[k]
-          if (a && typeof a === 'object' && !Array.isArray(a) && 'configured' in a) {
-            if (typeof b === 'string' && b) out[p] = b
-            else if (b && typeof b === 'object' && !Array.isArray(b) && '__plain' in b && b.__plain) out[p] = b.__plain
+          if (p === 'agent.mcp.servers') {
+            if (JSON.stringify(a) !== JSON.stringify(b)) out[p] = b
             continue
           }
           if (b && typeof b === 'object' && !Array.isArray(b) && a && typeof a === 'object') buildChanges(a, b, p, out)
@@ -94,6 +94,7 @@
       }
 
       const save = async () => {
+        mcpServersFromUi()
         const changes = buildChanges(origSnapshot, JSON.parse(JSON.stringify(form)))
         if (!Object.keys(changes).length) { toast('无改动', 'warn'); return }
         try {
@@ -144,31 +145,63 @@
       })
       onUnmounted(() => window.removeEventListener('scroll', onScroll))
 
-      /* 脱敏字段"替换"弹窗(纯 mock,不明文展示旧值) */
-      const maskEdit = reactive({ show: false, label: '', target: null, value: '' })
-      const openMaskEdit = (label, target) => { maskEdit.show = true; maskEdit.label = label; maskEdit.target = target; maskEdit.value = '' }
-      const applyMaskEdit = () => {
-        if (maskEdit.target && maskEdit.value.trim()) {
-          /* 标记明文:buildChanges 见到 __plain 即产出明文路径;后端写明文,GET 再脱敏 */
-          maskEdit.target.__plain = maskEdit.value.trim()
-          toast(`已更新「${maskEdit.label}」,保存后生效`)
-        }
-        maskEdit.show = false
-      }
-
-      /* 回退模型列表 */
-      const addFallback = () => form.fallbackModels.push({ model: '', baseURL: { configured: false }, apiKey: { configured: false }, protocol: 'openai' })
+      /* 回退模型列表(baseURL/apiKey 明文) */
+      const addFallback = () => form.fallbackModels.push({ model: '', baseURL: '', apiKey: '', protocol: 'openai' })
       const delFallback = (i) => form.fallbackModels.splice(i, 1)
 
-      /* masters */
+      /* masters(明文 QQ 数组) */
       const masterInput = ref('')
       const addMaster = () => {
         const v = masterInput.value.trim()
         if (/^\d{5,11}$/.test(v)) {
-          form.masters.push({ configured: true, preview: v.slice(0, 4) + '****' })
+          if (!form.masters.includes(v)) form.masters.push(v)
           masterInput.value = ''
-          toast('已添加主人(脱敏展示)', 'info')
         } else toast('QQ 号格式不正确', 'warn')
+      }
+      const delMaster = (i) => form.masters.splice(i, 1)
+
+      /* MCP servers：对象 map 与 UI 文本双向(env/headers 对象 ↔ textarea 文本)。全部明文。
+         loadConfig/reset 后 toUi 生成 _type/_envText/_headersText；save 前 fromUi 解析回并删除临时字段。 */
+      const mcpServersToUi = () => {
+        const servers = form.mcp?.servers
+        if (!servers || typeof servers !== 'object') return
+        for (const srv of Object.values(servers)) {
+          if (!srv || typeof srv !== 'object') continue
+          srv._type = srv.type === 'http' ? 'http' : 'stdio'
+          if (srv._type === 'stdio' && !Array.isArray(srv.args)) srv.args = srv.args ? [String(srv.args)] : []
+          srv._envText = srv.env && typeof srv.env === 'object' ? Object.entries(srv.env).map(([k, v]) => `${k}=${v}`).join('\n') : ''
+          srv._headersText = srv.headers && typeof srv.headers === 'object' ? Object.entries(srv.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : ''
+        }
+      }
+      const mcpServersFromUi = () => {
+        const servers = form.mcp?.servers
+        if (!servers || typeof servers !== 'object') return
+        for (const srv of Object.values(servers)) {
+          if (!srv || typeof srv !== 'object') continue
+          const env = {}, headers = {}
+          for (const line of String(srv._envText || '').split('\n')) { const idx = line.indexOf('='); if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1) }
+          for (const line of String(srv._headersText || '').split('\n')) { const idx = line.indexOf(':'); if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim() }
+          srv.env = Object.keys(env).length ? env : undefined
+          srv.headers = Object.keys(headers).length ? headers : undefined
+          if (srv._type === 'http') srv.type = 'http'; else delete srv.type
+          delete srv._type; delete srv._envText; delete srv._headersText
+        }
+      }
+      const addMcp = () => {
+        if (!form.mcp) form.mcp = {}
+        if (!form.mcp.servers || typeof form.mcp.servers !== 'object') form.mcp.servers = {}
+        let i = 1, name = 'new-server'
+        while (form.mcp.servers[name]) name = 'new-server-' + (++i)
+        form.mcp.servers[name] = { command: 'npx', args: [], _type: 'stdio', _envText: '', _headersText: '' }
+      }
+      const delMcp = (name) => { if (form.mcp.servers) delete form.mcp.servers[name] }
+      const renameMcp = (oldName, newName) => {
+        newName = String(newName || '').trim()
+        if (!newName || newName === oldName) return
+        if (form.mcp.servers[newName]) { toast('服务名已存在', 'warn'); return }
+        const srv = form.mcp.servers[oldName]
+        delete form.mcp.servers[oldName]
+        form.mcp.servers[newName] = srv
       }
 
       /* thinking 开关兼容 */
@@ -181,8 +214,8 @@
 
       return {
         form, dirty, save, reset, sections, open, activeSec, jump, OPT,
-        maskEdit, openMaskEdit, applyMaskEdit,
-        addFallback, delFallback, masterInput, addMaster,
+        addFallback, delFallback, masterInput, addMaster, delMaster,
+        mcpServersToUi, addMcp, delMcp, renameMcp,
         thinkingOn, tempPct,
       }
     },
@@ -214,11 +247,11 @@
             <cfg-row name="厂商预设" desc="自动填 baseURL / headers / 字段映射">
               <select class="select" style="width:170px" v-model="form.preset"><option v-for="o in OPT.preset" :value="o[0]">{{ o[1] }}</option></select>
             </cfg-row>
-            <cfg-row name="接口地址 baseURL" desc="敏感:仅展示域名,可替换">
-              <div class="flex gap6"><masked-value :value="form.baseURL"/><button class="btn btn-ghost btn-sm" @click="openMaskEdit('baseURL', form.baseURL)">替换</button></div>
+            <cfg-row name="接口地址 baseURL" desc="OpenAI 兼容接口地址">
+              <input class="input" style="width:260px" v-model="form.baseURL" placeholder="https://api.deepseek.com">
             </cfg-row>
-            <cfg-row name="API Key" desc="敏感:绝不返回明文">
-              <div class="flex gap6"><masked-value :value="form.apiKey"/><button class="btn btn-ghost btn-sm" @click="openMaskEdit('API Key', form.apiKey)">替换</button></div>
+            <cfg-row name="API Key" desc="主模型密钥(明文)">
+              <input class="input mono" style="width:260px" v-model="form.apiKey" placeholder="sk-...">
             </cfg-row>
             <cfg-row name="主模型 ID" desc="对话主模型">
               <input class="input" style="width:180px" v-model="form.model">
@@ -229,8 +262,8 @@
             <cfg-row name="多用户数据隔离" desc="开启后按 (群,用户) 隔离记忆与会话">
               <v-switch v-model="form.isolation.enable"/>
             </cfg-row>
-            <cfg-row name="代理" desc="敏感:可能含内网地址">
-              <div class="flex gap6"><masked-value :value="form.proxy"/><button class="btn btn-ghost btn-sm" @click="openMaskEdit('代理', form.proxy)">设置</button></div>
+            <cfg-row name="代理" desc="http 代理(留空=直连)">
+              <input class="input mono" style="width:240px" v-model="form.proxy" placeholder="http://127.0.0.1:7890">
             </cfg-row>
 
             <div class="full">
@@ -244,9 +277,8 @@
                     <span class="chip chip-outline mono" style="min-width:26px;justify-content:center">{{ i + 1 }}</span>
                     <input class="input" style="width:190px" v-model="fb.model" placeholder="模型 ID">
                     <select class="select" style="width:130px" v-model="fb.protocol"><option v-for="o in OPT.protocol" :value="o[0]">{{ o[1] }}</option></select>
-                    <masked-value :value="fb.baseURL"/>
-                    <masked-value :value="fb.apiKey"/>
-                    <button class="btn btn-ghost btn-sm" @click="openMaskEdit('回退 Key', fb.apiKey)">设 Key</button>
+                    <input class="input mono" style="width:170px" v-model="fb.baseURL" placeholder="baseURL">
+                    <input class="input mono" style="width:150px" v-model="fb.apiKey" placeholder="apiKey">
                   </div>
                   <button class="icon-btn danger" @click="delFallback(i)"><v-icon name="trash"/></button>
                 </div>
@@ -404,6 +436,23 @@
                 <span class="chip mono">{{ form.evolution.suggestionDir }}</span>
               </div>
             </cfg-row>
+            <div class="full" style="margin-top:6px;padding-top:10px;border-top:1px dashed var(--border)">
+              <div class="muted" style="font-size:12px;font-weight:700;margin-bottom:8px"><v-icon name="tool"/> 工具进化（Tool Evolution）</div>
+              <div class="cfg-grid">
+                <cfg-row name="工具进化" desc="版本化工具库(生成→验证→审批→晋升)">
+                  <v-switch v-model="form.toolEvo.enable"/>
+                </cfg-row>
+                <cfg-row name="候选修复次数" desc="生成失败自动修复上限">
+                  <input type="number" class="input" style="width:90px" min="0" max="3" v-model.number="form.toolEvo.maxRepairAttempts">
+                </cfg-row>
+                <cfg-row name="检索接受阈值" desc="与去重阈值分开(§12.1)">
+                  <input type="number" class="input" style="width:100px" min="0" max="1" step="0.01" v-model.number="form.toolEvo.retrievalThreshold">
+                </cfg-row>
+                <cfg-row name="去重阈值" desc="候选去重相似度">
+                  <input type="number" class="input" style="width:100px" min="0" max="1" step="0.01" v-model.number="form.toolEvo.deduplicationThreshold">
+                </cfg-row>
+              </div>
+            </div>
           </div></div>
         </div>
 
@@ -439,9 +488,9 @@
             <cfg-row name="日志级别" desc="devLog.level">
               <select class="select" style="width:120px" v-model="form.devLog.level"><option value="info">info</option><option value="warn">warn</option><option value="debug">debug</option></select>
             </cfg-row>
-            <cfg-row class="full" name="主人列表" desc="敏感:QQ 号脱敏展示">
+            <cfg-row class="full" name="主人列表" desc="主人 QQ 号(明文,点标签删除)">
               <div class="flex gap6 wrap" style="justify-content:flex-end">
-                <masked-value v-for="(m, i) in form.masters" :key="i" :value="m"/>
+                <span v-for="(m, i) in form.masters" :key="i" class="chip chip-outline mono" style="cursor:pointer" @click="delMaster(i)" title="点击删除">{{ m }} <v-icon name="x"/></span>
                 <input class="input" style="width:130px;padding:4px 9px;font-size:12px" v-model="masterInput" placeholder="输入 QQ 回车添加" @keydown.enter.prevent="addMaster">
               </div>
             </cfg-row>
@@ -469,7 +518,7 @@
               <v-switch v-model="form.vision.enable"/>
             </cfg-row>
             <cfg-row name="视觉模型 Key" desc="空则复用主 apiKey">
-              <div class="flex gap6"><masked-value :value="form.vision.apiKey"/><button class="btn btn-ghost btn-sm" @click="openMaskEdit('视觉 Key', form.vision.apiKey)">替换</button></div>
+              <input class="input mono" style="width:240px" v-model="form.vision.apiKey" placeholder="留空=复用主 Key">
             </cfg-row>
             <cfg-row name="工具按需发现" desc="常驻少数工具,其余 tool_search 动态注入">
               <v-switch v-model="form.toolDiscovery.enable"/>
@@ -485,11 +534,13 @@
             </cfg-row>
 
             <cfg-row name="Tavily 搜索 Key" desc="任填一个搜索源即启用">
-              <div class="flex gap6"><masked-value :value="form.search.tavily.apiKey"/><button class="btn btn-ghost btn-sm" @click="openMaskEdit('Tavily Key', form.search.tavily.apiKey)">替换</button></div>
+              <input class="input mono" style="width:220px" v-model="form.search.tavily.apiKey" placeholder="tvly-...">
             </cfg-row>
-            <cfg-row name="Exa / Brave / PPLX" desc="其余搜索源密钥">
-              <div class="flex gap6 wrap" style="justify-content:flex-end">
-                <masked-value :value="form.search.exa.apiKey"/><masked-value :value="form.search.brave.apiKey"/><masked-value :value="form.search.perplexity.apiKey"/>
+            <cfg-row class="full" name="Exa / Brave / PPLX Key" desc="其余搜索源密钥(明文)">
+              <div class="flex gap6 wrap">
+                <input class="input mono" style="width:150px" v-model="form.search.exa.apiKey" placeholder="Exa">
+                <input class="input mono" style="width:150px" v-model="form.search.brave.apiKey" placeholder="Brave">
+                <input class="input mono" style="width:150px" v-model="form.search.perplexity.apiKey" placeholder="Perplexity">
               </div>
             </cfg-row>
             <cfg-row name="DDG 兜底" desc="本地 DuckDuckGo,免 key">
@@ -498,11 +549,11 @@
             <cfg-row name="深度研究权限" desc="#研究 命令">
               <select class="select" style="width:170px" v-model="form.research.permission"><option v-for="o in OPT.researchPerm" :value="o[0]">{{ o[1] }}</option></select>
             </cfg-row>
-            <cfg-row name="米游社 Cookie" desc="敏感:仅显示是否已配置">
-              <masked-value :value="form.miyoushe.cookie"/>
+            <cfg-row class="full" name="米游社 Cookie" desc="明文">
+              <input class="input mono" style="width:100%" v-model="form.miyoushe.cookie" placeholder="cookie 字符串">
             </cfg-row>
-            <cfg-row name="Pixiv refreshToken" desc="敏感:仅显示是否已配置">
-              <masked-value :value="form.pixiv.refreshToken"/>
+            <cfg-row class="full" name="Pixiv refreshToken" desc="明文">
+              <input class="input mono" style="width:100%" v-model="form.pixiv.refreshToken" placeholder="refresh token">
             </cfg-row>
             <cfg-row name="语音转写 STT" desc="whisper 兼容接口">
               <v-switch v-model="form.stt.enable"/>
@@ -521,18 +572,35 @@
             </cfg-row>
 
             <div class="full">
-              <div style="font-weight:800;font-size:13px;margin-bottom:10px">MCP 服务端 <span class="muted-3" style="font-weight:400;font-size:11.5px">env / headers 值已脱敏,仅显示键名</span></div>
-              <div class="grid grid-2" style="gap:10px">
-                <div v-for="(srv, name) in form.mcp.servers" :key="name" class="cfg-item" style="background:#fff;align-items:flex-start">
-                  <div class="info">
-                    <div class="name mono">{{ name }}</div>
-                    <div class="desc mono">{{ srv.command ? srv.command + ' ' + (srv.args||[]).join(' ') : srv.type + ' ' + srv.url }}</div>
-                    <div class="flex gap6 wrap mt10" v-if="srv.env || srv.headers">
-                      <span v-for="(v, k) in (srv.env || {})" :key="k" class="chip chip-amber mono">{{ k }}=<v-icon name="lock"/></span>
-                      <span v-for="(v, k) in (srv.headers || {})" :key="k" class="chip chip-amber mono">{{ k }}=<v-icon name="lock"/></span>
-                    </div>
+              <div class="flex between mb10">
+                <div style="font-weight:800;font-size:13px">MCP 服务端 <span class="muted-3" style="font-weight:400;font-size:11.5px">明文编辑 · stdio(command/args/env) 与 http(url/headers)</span></div>
+                <button class="btn btn-soft btn-sm" @click="addMcp"><v-icon name="plus"/>新增服务</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:10px">
+                <div v-for="(srv, name) in (form.mcp?.servers || {})" :key="name" class="cfg-item" style="background:#fff;flex-direction:column;align-items:stretch;gap:8px">
+                  <div class="flex gap6 wrap" style="align-items:center">
+                    <v-icon name="tool" style="color:var(--primary)"/>
+                    <input class="input mono" style="width:150px;font-weight:700" :value="name" @change="renameMcp(name, $event.target.value)" title="服务名(回车改名)">
+                    <select class="select" style="width:96px" v-model="srv._type"><option value="stdio">stdio</option><option value="http">http</option></select>
+                    <span style="flex:1"></span>
+                    <button class="icon-btn danger" @click="delMcp(name)" title="删除服务"><v-icon name="trash"/></button>
                   </div>
+                  <template v-if="srv._type === 'http'">
+                    <input class="input mono" style="width:100%" v-model="srv.url" placeholder="url：https://mcp.example.com/sse">
+                    <div class="muted-3" style="font-size:11px">headers（KEY: VALUE 每行一个）</div>
+                    <textarea class="textarea mono" style="min-height:56px;width:100%" v-model="srv._headersText" placeholder="Authorization: Bearer xxx"></textarea>
+                  </template>
+                  <template v-else>
+                    <div class="flex gap6 wrap">
+                      <input class="input mono" style="width:160px" v-model="srv.command" placeholder="command：npx">
+                    </div>
+                    <div class="muted-3" style="font-size:11px">args（每个参数一项）</div>
+                    <tag-editor v-model="srv.args" placeholder="回车添加，如 -y"/>
+                    <div class="muted-3" style="font-size:11px">环境变量 env（KEY=VALUE 每行一个）</div>
+                    <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._envText" placeholder="NODE_ENV=production"></textarea>
+                  </template>
                 </div>
+                <div v-if="!(form.mcp?.servers && Object.keys(form.mcp.servers).length)" class="muted-3" style="font-size:12px;padding:8px">暂无 MCP 服务，点「新增服务」添加</div>
               </div>
             </div>
 
@@ -573,18 +641,6 @@
         </Transition>
       </div>
 
-      <!-- 脱敏替换弹窗 -->
-      <v-modal v-if="maskEdit.show" :title="'替换敏感值 · ' + maskEdit.label" icon="key" @close="maskEdit.show = false">
-        <div class="field">
-          <label class="field-label">新值</label>
-          <input class="input" v-model="maskEdit.value" placeholder="输入新值,旧值永不明文展示" @keydown.enter="applyMaskEdit">
-          <span class="field-help">按 §5 脱敏规范:接口只返回 { configured, preview },此处仅模拟"写入后重新生成预览"。</span>
-        </div>
-        <template #foot>
-          <button class="btn btn-ghost" @click="maskEdit.show = false">取消</button>
-          <button class="btn btn-primary" @click="applyMaskEdit"><v-icon name="check"/>确认替换</button>
-        </template>
-      </v-modal>
     </div>`,
   }
 })()
