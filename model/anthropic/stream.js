@@ -21,7 +21,7 @@
 import { parseToolInput } from './helpers.js'
 import { APIError } from './errors.js'
 
-export function createMessageStream(response) {
+export function createMessageStream(response, { idleMs = 60000 } = {}) {
   // 按 content block index 聚合
   const blocks = {} // index -> block 状态
   const order = [] // 已出现过的 index（保持顺序）
@@ -199,7 +199,19 @@ export function createMessageStream(response) {
     let buffer = ''
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        // idle 超时：fetch timeout 只覆盖连接建立，SSE body 读取须单独保护（服务端挂起 → cancel + 抛错）
+        let timer = null
+        const raced = await Promise.race([
+          reader.read(),
+          new Promise((_, reject) => {
+            timer = setTimeout(async () => {
+              try { await reader.cancel() } catch { /* noop */ }
+              reject(new Error(`流式 idle 超时（${idleMs}ms 无数据，服务端可能挂起）`))
+            }, idleMs)
+          }),
+        ]).catch((e) => { clearTimeout(timer); throw e })
+        clearTimeout(timer)
+        const { done, value } = raced
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         let sep

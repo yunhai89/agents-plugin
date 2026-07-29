@@ -12,7 +12,7 @@
 
 import { parseToolArguments } from './helpers.js'
 
-export function createStream(response, { reasoningFields = [] } = {}) {
+export function createStream(response, { reasoningFields = [], idleMs = 60000 } = {}) {
   // 增量缓冲
   const buf = { toolCalls: {} } // index -> { id, type, name, argsRaw }
   const state = {
@@ -135,7 +135,20 @@ export function createStream(response, { reasoningFields = [] } = {}) {
     let buffer = ''
     try {
       while (true) {
-        const { done, value } = await reader.read()
+        // idle 超时：fetch 的 timeout 只覆盖连接建立，body 读取(SSE)须单独保护——
+        // 两 chunk 间隔超过 idleMs 即判定服务端挂起（cancel reader 释放连接 + 抛错，由上层重试/兜底）
+        let timer = null
+        const raced = await Promise.race([
+          reader.read(),
+          new Promise((_, reject) => {
+            timer = setTimeout(async () => {
+              try { await reader.cancel() } catch { /* noop */ }
+              reject(new Error(`流式 idle 超时（${idleMs}ms 无数据，服务端可能挂起）`))
+            }, idleMs)
+          }),
+        ]).catch((e) => { clearTimeout(timer); throw e })
+        clearTimeout(timer)
+        const { done, value } = raced
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         let sep

@@ -108,7 +108,7 @@ export class OpenAIClient {
 
     if (isStream) {
       const res = await requestWithRetry({ ...common, stream: true })
-      return createStream(res, { reasoningFields: this.reasoningFields })
+      return createStream(res, { reasoningFields: this.reasoningFields, idleMs: opts.timeout ?? this.timeout })
     }
 
     const { data } = await requestWithRetry({ ...common, stream: false })
