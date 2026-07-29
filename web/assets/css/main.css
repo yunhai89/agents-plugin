@@ -338,10 +338,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   background: rgba(34, 48, 74, .36);
   backdrop-filter: blur(3px);
   display: grid; place-items: center; padding: 26px;
-  overflow-y: auto;
+  overflow-y: auto; overflow-x: hidden;
 }
 .modal {
-  width: 640px; max-width: 100%; max-height: 88vh; max-height: calc(100dvh - 52px);
+  width: 640px; max-width: calc(100vw - 52px); max-height: 88vh; max-height: calc(100dvh - 52px);
   display: flex; flex-direction: column;
   background: var(--surface); border-radius: var(--r-xl);
   box-shadow: var(--shadow-lg); overflow: hidden;
@@ -352,7 +352,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
   padding: 18px 24px 14px; border-bottom: 1px solid var(--border);
 }
 .modal-title { font-size: 16px; font-weight: 800; }
-.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.modal-body { padding: 20px 24px; overflow-y: auto; overflow-x: auto; flex: 1; min-width: 0; overflow-wrap: break-word; }
 .modal-foot { padding: 14px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: var(--surface-2); }
 .modal-x {
   margin-left: auto; width: 32px; height: 32px; border-radius: 9px; border: none;
