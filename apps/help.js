@@ -83,6 +83,9 @@ const SECTIONS = [
       { cmd: '#回滚 +key', desc: '回滚 prompt 到内置默认（如 #回滚 agent）' },
       { cmd: '#进化 prompt +key', desc: '离线 GEPA 进化 prompt（采样轨迹→迭代→judge，约 1-3 分钟）' },
       { cmd: '#进化工具 +能力描述', desc: '生成候选工具（LLM 生成 + typescript AST 验证 → draft，待审批上线）' },
+      { cmd: '#工具进化列表', desc: '查看所有进化工具版本与状态（draft/verified/stable/rejected）' },
+      { cmd: '#采纳工具 +versionId', desc: '采纳 verified 候选 → stable 并注入（agent 可调用）' },
+      { cmd: '#淘汰工具 +versionId', desc: '淘汰工具（deprecated + 卸载，制品保留作审计）' },
     ],
   },
 ]

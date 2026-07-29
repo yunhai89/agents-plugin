@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 import { dao } from './db.js'
 import { canTransition, isValidState } from './lifecycle.js'
 import { validateManifest } from './manifest.js'
@@ -104,20 +105,25 @@ export class ToolEvoRegistry {
     return rows.map((r) => ({ versionId: r.version_id, toolId: r.tool_id, name: r.name, semver: r.semver, manifest: JSON.parse(r.manifest_json) }))
   }
 
-  /** 导出为 ToolRegistry 契约；execute 由 sandbox runner 执行 source（阶段2 接入） */
-  async toToolContract(stable, runInSandbox) {
+  /**
+   * 导出为 ToolRegistry 契约；execute = dynamic import 制品 index.js 的 run。
+   * stable 已过 AST + 行为验证（阶段1/2），运行时不再 sandbox（直接 run，性能开销小）。
+   * 制品文件不可变（版本目录），Node 模块缓存复用。
+   */
+  async toToolContract(stable) {
     const dir = path.join(this.artifactsDir, stable.manifest.name, stable.semver)
-    const source = fs.readFileSync(path.join(dir, 'index.js'), 'utf8')
+    const fileUrl = pathToFileURL(path.join(dir, 'index.js')).href
+    let mod
+    try { mod = await import(fileUrl) }
+    catch (e) { throw new Error(`加载工具制品失败（${stable.manifest.name}@${stable.semver}）：${e?.message || e}`) }
+    if (typeof mod.run !== 'function') throw new Error(`工具制品未导出 run：${stable.manifest.name}@${stable.semver}`)
     return {
       name: stable.manifest.name,
       description: stable.manifest.description,
       parameters: stable.manifest.inputSchema,
       category: 'evolved',
       meta: { toolEvoVersionId: stable.versionId, sideEffects: stable.manifest.permissions.sideEffects },
-      async execute(params) {
-        if (!runInSandbox) throw new Error('sandbox runner 未接入（阶段2）')
-        return runInSandbox({ source, manifest: stable.manifest, input: params, versionId: stable.versionId })
-      },
+      async execute(params, ctx) { return mod.run(params, ctx) },
     }
   }
 }

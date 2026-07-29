@@ -282,9 +282,15 @@
   ]
 
   /* 包成 Vue.reactive:各视图直接修改 MOCK 即可驱动界面更新(模拟写操作) */
+  const tevoTools = [
+    { id: 'tv_abc123def', tool_id: 'tool_extract_email', semver: '0.1.0', status: 'verified', source_hash: 'a1b2c3', generator_model: 'deepseek-chat', created_at: now - 2 * H },
+    { id: 'tv_xyz789abc', tool_id: 'tool_json_flatten', semver: '0.1.0', status: 'stable', source_hash: 'd4e5f6', generator_model: 'deepseek-chat', created_at: now - 1 * D },
+    { id: 'tv_bad000fff', tool_id: 'tool_run_cmd', semver: '0.1.0', status: 'rejected', source_hash: 'g7h8i9', generator_model: 'deepseek-chat', created_at: now - 3 * H },
+    { id: 'tv_draft011', tool_id: 'text_normalize', semver: '0.1.0', status: 'draft', source_hash: 'j0k1l2', generator_model: 'deepseek-chat', created_at: now - 30 * M },
+  ]
   window.MOCK = Vue.reactive({
     config, scopes, memories, recall, personas, skills,
     conversations, sessions, logFiles, schedules, confirms,
-    suggestions, perceptions, tokenTrend, toolTop,
+    suggestions, perceptions, tokenTrend, toolTop, tevoTools,
   })
 })()

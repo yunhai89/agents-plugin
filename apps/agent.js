@@ -556,6 +556,13 @@ async function buildRuntime() {
       const seeded = await te.seedBuiltinTools(toolEvoRegistry, builtins).catch((e) => { Log.warn('[toolEvo] seed 失败', e?.message || e); return 0 })
       const synthesizer = new te.ToolSynthesizer({ provider, model: srCfg.model || cfg.utilityModel || cfg.model, maxRepairAttempts: cfg.toolEvo?.maxRepairAttempts ?? 2, logger: Log.tag('toolEvo') })
       const engine = new te.EvolutionEngine({ synthesizer, registry: toolEvoRegistry, logger: Log.tag('toolEvo') })
+      // 注入已 stable 的进化工具（重启/热重载后自动恢复，供 agent tool_search 调用）
+      let stableCount = 0
+      try {
+        for (const s of await toolEvoRegistry.listStable()) {
+          try { tools.register(await toolEvoRegistry.toToolContract(s)); stableCount++ } catch (e) { Log.warn('[toolEvo] 注入 stable 失败', s.name, e?.message || e) }
+        }
+      } catch (e) { Log.warn('[toolEvo] stable 注入失败', e?.message || e) }
       toolEvo = { registry: toolEvoRegistry, engine, closeDb: te.closeDb, flushNow: te.flushNow }
       Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具）`)
     } catch (e) { Log.warn('[toolEvo] 初始化失败（sqlite3 未装？）', e?.message || e) }
@@ -768,6 +775,9 @@ export class Chat extends plugin {
         { reg: '^#添加[Mm][Cc][Pp]', fnc: 'addMcp', permission: 'master' },
         { reg: '^#agents重载$', fnc: 'agentsReload', permission: 'master' },
         { reg: '^#进化工具\\s+([\\s\\S]+)', fnc: 'toolEvoEvolve', permission: 'master' },
+        { reg: '^#工具进化列表$', fnc: 'toolEvoList', permission: 'master' },
+        { reg: '^#采纳工具\\s+(\\S+)', fnc: 'toolEvoAdopt', permission: 'master' },
+        { reg: '^#淘汰工具\\s+(\\S+)', fnc: 'toolEvoDecommission', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
         { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
@@ -1148,6 +1158,49 @@ export class Chat extends plugin {
         await this.e.reply(`❌ 候选被拒（${r.status}）：\n${r.reason}`)
       }
     } catch (err) { await this.e.reply('❌ 进化失败：' + (err?.message || err)) }
+    return true
+  }
+
+  async toolEvoList() {
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.registry) { await this.e.reply('工具进化未启用（config: agent.toolEvo.enable）'); return true }
+    const versions = await rt.toolEvo.registry.listVersions()
+    if (!versions.length) { await this.e.reply('暂无进化工具版本。用 #进化工具 <能力描述> 生成候选。'); return true }
+    const icon = (s) => s === 'stable' ? '🟢' : s === 'verified' ? '🟡' : s === 'draft' ? '⚪' : '⚫'
+    const lines = versions.slice(0, 20).map((v) => `${icon(v.status)} ${v.semver} · id=${v.id} [${v.status}]`)
+    await this.e.reply(`工具进化版本（共 ${versions.length}，显示前 20）：\n${lines.join('\n')}\n\n🟡verified 可 #采纳工具 <id> 晋升 stable`)
+    return true
+  }
+
+  async toolEvoAdopt() {
+    const versionId = this.e.msg.replace(/^#采纳工具\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.registry) { await this.e.reply('工具进化未启用'); return true }
+    const reg = rt.toolEvo.registry
+    const v = await reg.getVersion(versionId)
+    if (!v) { await this.e.reply(`版本 ${versionId} 不存在`); return true }
+    if (v.status !== 'verified') { await this.e.reply(`仅 verified 候选可采纳（当前状态：${v.status}）`); return true }
+    try {
+      await reg.setStatus(versionId, 'stable', { actor: 'master:' + this.e.user_id, reason: '手动采纳' })
+      const stable = (await reg.listStable()).find((s) => s.versionId === versionId)
+      if (stable) rt.tools.register(await reg.toToolContract(stable))
+      await this.e.reply(`✅ ${v.manifest.name}@${v.semver} 已晋升 stable 并注入\nagent 可经 tool_search 调用（工具名：${v.manifest.name}）`)
+    } catch (e) { await this.e.reply('❌ 采纳失败：' + (e?.message || e)) }
+    return true
+  }
+
+  async toolEvoDecommission() {
+    const versionId = this.e.msg.replace(/^#淘汰工具\s+/, '').trim()
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.registry) { await this.e.reply('工具进化未启用'); return true }
+    const reg = rt.toolEvo.registry
+    const v = await reg.getVersion(versionId)
+    if (!v) { await this.e.reply(`版本 ${versionId} 不存在`); return true }
+    try {
+      await reg.setStatus(versionId, 'deprecated', { actor: 'master:' + this.e.user_id, reason: '手动淘汰' })
+      rt.tools.unregister(v.manifest.name)
+      await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰并卸载（制品保留作审计）`)
+    } catch (e) { await this.e.reply('❌ 淘汰失败：' + (e?.message || e)) }
     return true
   }
 

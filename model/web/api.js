@@ -161,6 +161,40 @@ router.get('/suggestions', asyncHandler(async (req, res) => {
   return ok(res, list)
 }))
 
+// ── Tool Evolution（工具进化：版本/状态/审批）──
+// GET /api/tevo/tools —— 所有工具版本（id/tool_id/semver/status/source_hash/created_at）
+router.get('/tevo/tools', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return ok(res, [])
+  return ok(res, await r.toolEvo.registry.listVersions())
+}))
+
+// POST /api/tevo/tools/:versionId/approve —— verified→stable 并注入 ToolRegistry
+router.post('/tevo/tools/:versionId/approve', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return fail(res, CODE.BAD, '工具进化未启用')
+  const reg = r.toolEvo.registry
+  const v = await reg.getVersion(req.params.versionId)
+  if (!v) return fail(res, CODE.NOTFOUND, '版本不存在')
+  if (v.status !== 'verified') return fail(res, CODE.BAD, `仅 verified 候选可采纳（当前 ${v.status}）`)
+  await reg.setStatus(req.params.versionId, 'stable', { actor: 'web:' + (req.master || 'unknown'), reason: 'web 面板采纳' })
+  const stable = (await reg.listStable()).find((s) => s.versionId === req.params.versionId)
+  if (stable) r.tools.register(await reg.toToolContract(stable))
+  return ok(res, { versionId: req.params.versionId, status: 'stable' }, '已晋升 stable 并注入')
+}))
+
+// POST /api/tevo/tools/:versionId/decommission —— 淘汰（deprecated + 卸载）
+router.post('/tevo/tools/:versionId/decommission', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return fail(res, CODE.BAD, '工具进化未启用')
+  const reg = r.toolEvo.registry
+  const v = await reg.getVersion(req.params.versionId)
+  if (!v) return fail(res, CODE.NOTFOUND, '版本不存在')
+  await reg.setStatus(req.params.versionId, 'deprecated', { actor: 'web:' + (req.master || 'unknown'), reason: 'web 面板淘汰' })
+  r.tools.unregister(v.manifest.name)
+  return ok(res, { versionId: req.params.versionId, status: 'deprecated' }, '已淘汰并卸载')
+}))
+
 // GET /api/overview —— 概览聚合（60s 缓存）
 let _overviewCache = null
 router.get('/overview', asyncHandler(async (req, res) => {
