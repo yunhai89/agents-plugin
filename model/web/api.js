@@ -195,6 +195,22 @@ router.post('/tevo/tools/:versionId/decommission', asyncHandler(async (req, res)
   return ok(res, { versionId: req.params.versionId, status: 'deprecated' }, '已淘汰并卸载')
 }))
 
+// GET /api/tevo/metrics —— 收敛指标（生成率/复用率/失败率/库紧凑度）
+router.get('/tevo/metrics', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return ok(res, null)
+  const { convergenceMetrics } = await import('../../toolEvo/evaluator.js')
+  return ok(res, await convergenceMetrics())
+}))
+
+// GET /api/tevo/health —— 失败聚类（高失败率 stable 工具，修复候选）
+router.get('/tevo/health', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return ok(res, [])
+  const { failureClusters } = await import('../../toolEvo/evaluator.js')
+  return ok(res, await failureClusters())
+}))
+
 // GET /api/overview —— 概览聚合（60s 缓存）
 let _overviewCache = null
 router.get('/overview', asyncHandler(async (req, res) => {

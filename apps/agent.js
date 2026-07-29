@@ -778,6 +778,7 @@ export class Chat extends plugin {
         { reg: '^#工具进化列表$', fnc: 'toolEvoList', permission: 'master' },
         { reg: '^#采纳工具\\s+(\\S+)', fnc: 'toolEvoAdopt', permission: 'master' },
         { reg: '^#淘汰工具\\s+(\\S+)', fnc: 'toolEvoDecommission', permission: 'master' },
+        { reg: '^#工具健康$', fnc: 'toolEvoHealth', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
         { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
@@ -1201,6 +1202,18 @@ export class Chat extends plugin {
       rt.tools.unregister(v.manifest.name)
       await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰并卸载（制品保留作审计）`)
     } catch (e) { await this.e.reply('❌ 淘汰失败：' + (e?.message || e)) }
+    return true
+  }
+
+  async toolEvoHealth() {
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.registry) { await this.e.reply('工具进化未启用（config: agent.toolEvo.enable）'); return true }
+    const { failureClusters, convergenceMetrics } = await import('../model/toolEvo/evaluator.js')
+    const [clusters, metrics] = await Promise.all([failureClusters(), convergenceMetrics()])
+    const head = `📊 工具库：${metrics.stable} stable / ${metrics.totalVersions} 总版本 · 调用 ${metrics.invocations} 次（失败率 ${(metrics.invocationFailRate * 100).toFixed(0)}%）`
+    if (!clusters.length) { await this.e.reply(`${head}\n\n✅ 所有 stable 工具健康（无高失败率工具）`); return true }
+    const lines = clusters.map((c) => `⚠️ ${c.toolName}：失败率 ${(c.failRate * 100).toFixed(0)}%（${c.failed}/${c.total}）· ${c.topErrors.join(', ')}`)
+    await this.e.reply(`${head}\n\n${lines.join('\n')}\n\n用 #进化工具 <修复描述> 生成修复候选`)
     return true
   }
 

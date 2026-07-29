@@ -86,6 +86,7 @@ const SECTIONS = [
       { cmd: '#工具进化列表', desc: '查看所有进化工具版本与状态（draft/verified/stable/rejected）' },
       { cmd: '#采纳工具 +versionId', desc: '采纳 verified 候选 → stable 并注入（agent 可调用）' },
       { cmd: '#淘汰工具 +versionId', desc: '淘汰工具（deprecated + 卸载，制品保留作审计）' },
+      { cmd: '#工具健康', desc: '工具库收敛指标 + 高失败率工具检测（触发修复）' },
     ],
   },
 ]

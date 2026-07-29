@@ -36,7 +36,7 @@ function buildReviewPrompt({ recent, memSnap, skillList, botName }) {
     '',
     '## 输出规则',
     '只输出 JSON 数组（不要 markdown 代码块、不要解释），每项一个 suggestion：',
-    '{ "kind": "memory"|"skill"|"prompt", "action": "add"|"replace"|"remove"|"update"|"create", "target": "<memory目标:memory|user / 技能名 / prompt key如agent>", "payload": "<新内容或条目文本>", "rationale": "<为何有价值>", "confidence": 0~1 }',
+    '{ "kind": "memory"|"skill"|"prompt"|"tool", "action": "add"|"replace"|"remove"|"update"|"create", "target": "<memory目标:memory|user / 技能名 / prompt key如agent / 工具名>", "payload": "<新内容文本；tool 类须为 {description:<改进后的工具描述>}>", "rationale": "<为何有价值>", "confidence": 0~1 }',
     '无改进则输出 []。',
     '',
     '## 强负面约束——以下情况绝不产出 suggestion',
@@ -45,7 +45,7 @@ function buildReviewPrompt({ recent, memSnap, skillList, botName }) {
     '3. 用户临时/情绪状态（"用户现在有点累""心情不好"）—— 非持久事实。',
     '4. 仅凭单次对话的强结论 —— 需多次稳定出现才值得固化。',
     '5. 不得改动与本轮任务无关的既有稳定记忆/技能。',
-    '6. 不得产出 memory/skill/prompt 以外的 suggestion。',
+    '6. 不得产出 memory/skill/prompt/tool 以外的 suggestion。',
     '',
     '## 优先级',
     '更新已有 > 新增；宁缺毋滥，最多 3 条；只提真正值得长期记住的用户事实/偏好/身份，或确实能提升回复质量的技能/prompt 改进。',
@@ -71,7 +71,15 @@ function parseSuggestions(text) {
   return []
 }
 
-const ALLOWED_KIND = new Set(['memory', 'skill', 'prompt'])
+const ALLOWED_KIND = new Set(['memory', 'skill', 'prompt', 'tool'])
+
+/** semver patch 自增（1.0.0 → 1.0.1），用于 tool suggestion 改 description 的新版本 */
+function bumpPatch(semver) {
+  const p = String(semver || '0.0.0').split('.').map((n) => parseInt(n, 10) || 0)
+  while (p.length < 3) p.push(0)
+  p[2] += 1
+  return p.join('.')
+}
 
 export class SelfReviewer {
   constructor({
@@ -250,6 +258,22 @@ export async function applySuggestion(rt, s) {
     else rt.memory.add(target, String(s.payload || ''), s.scopeId)
     removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
     return { ok: true, note: `memory ${s.action} 已应用` }
+  }
+  if (s.kind === 'tool') {
+    const reg = rt.toolEvo?.registry
+    if (!reg) throw new Error('toolEvo 未启用，无法应用 tool suggestion')
+    const tool = await reg.getByName(s.target)
+    if (!tool?.active_version_id) throw new Error(`工具 ${s.target} 不存在或无 active 版本`)
+    const active = await reg.getVersion(tool.active_version_id)
+    const newSemver = bumpPatch(active.semver)
+    // 仅改进 description（payload.description），复用原 source + tests → 新 patch 版本 draft
+    const newManifest = { ...active.manifest, description: (s.payload && s.payload.description) || active.manifest.description, version: newSemver, status: 'draft' }
+    const dir = path.join(reg.artifactsDir, s.target, active.semver)
+    let source = ''
+    try { source = fs.readFileSync(path.join(dir, 'index.js'), 'utf8') } catch { /* noop */ }
+    await reg.createVersion({ toolId: tool.id, semver: newSemver, manifest: newManifest, source, parentVersionId: active.id })
+    removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
+    return { ok: true, note: `工具「${s.target}」description 改进 → ${newSemver} draft（待 #采纳工具 验证上线）` }
   }
   // skill 类：无自动应用机制，仅移出待审
   removeSuggestion(rt.suggestionDir, s.scopeId, s.id)
