@@ -279,22 +279,22 @@ input, select, textarea { font-family: inherit; font-size: inherit; color: inher
 .select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 34px; cursor: pointer; }
 .input::placeholder, .textarea::placeholder { color: var(--text-3); }
 
-/* 开关 */
-.switch { position: relative; width: 42px; height: 24px; flex: 0 0 42px; cursor: pointer; }
-.switch input { display: none; }
-.switch .track {
+/* 开关（w3schools 标准：input:checked + .slider 伪类驱动，纯 CSS 不依赖 JS class 重渲染）*/
+.switch { position: relative; display: inline-block; width: 42px; height: 24px; flex: 0 0 42px; cursor: pointer; vertical-align: middle; }
+.switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.switch .slider {
   position: absolute; inset: 0; border-radius: 999px;
-  background: #d7deeb; transition: background var(--dur) var(--ease);
+  background: #d7deeb; transition: background var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
-.switch .knob {
-  position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
-  border-radius: 50%; background: #fff;
+.switch .slider::before {
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
   box-shadow: 0 2px 5px rgba(34,48,74,.25);
-  transition: transform var(--dur) var(--ease);
+  transition: transform var(--dur) var(--ease), width var(--dur) var(--ease);
 }
-.switch.on .track { background: var(--primary); box-shadow: 0 3px 10px -2px rgba(99,102,241,.55); }
-.switch.on .knob { transform: translateX(18px); }
-.switch:active .knob { width: 22px; }
+.switch input:checked + .slider { background: var(--primary); box-shadow: 0 3px 10px -2px rgba(99,102,241,.55); }
+.switch input:checked + .slider::before { transform: translateX(18px); }
+.switch:active .slider::before { width: 22px; }
 
 /* 滑块 */
 .slider { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 999px; background: linear-gradient(to right, var(--primary) var(--fill, 50%), #dde4f0 var(--fill, 50%)); outline: none; }

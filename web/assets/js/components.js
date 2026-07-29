@@ -110,9 +110,9 @@
     name: 'VSwitch',
     props: { modelValue: Boolean },
     emits: ['update:modelValue'],
-    template: `<label class="switch" :class="{on: modelValue}" @click.stop>
-      <input type="checkbox" :checked="modelValue" @change="$emit('update:modelValue', $event.target.checked)">
-      <span class="track"></span><span class="knob"></span>
+    template: `<label class="switch">
+      <input type="checkbox" :checked="!!modelValue" @change="$emit('update:modelValue', $event.target.checked)">
+      <span class="slider"></span>
     </label>`,
   })
 
