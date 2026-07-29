@@ -554,7 +554,9 @@ async function buildRuntime() {
         sideEffects: t.meta?.sideEffects || ['none'], tags: ['builtin'],
       }))
       const seeded = await te.seedBuiltinTools(toolEvoRegistry, builtins).catch((e) => { Log.warn('[toolEvo] seed 失败', e?.message || e); return 0 })
-      toolEvo = { registry: toolEvoRegistry, closeDb: te.closeDb, flushNow: te.flushNow }
+      const synthesizer = new te.ToolSynthesizer({ provider, model: srCfg.model || cfg.utilityModel || cfg.model, maxRepairAttempts: cfg.toolEvo?.maxRepairAttempts ?? 2, logger: Log.tag('toolEvo') })
+      const engine = new te.EvolutionEngine({ synthesizer, registry: toolEvoRegistry, logger: Log.tag('toolEvo') })
+      toolEvo = { registry: toolEvoRegistry, engine, closeDb: te.closeDb, flushNow: te.flushNow }
       Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具）`)
     } catch (e) { Log.warn('[toolEvo] 初始化失败（sqlite3 未装？）', e?.message || e) }
   }
@@ -765,6 +767,7 @@ export class Chat extends plugin {
         { reg: '^#mcp$', fnc: 'mcpStatus', permission: 'master' },
         { reg: '^#添加[Mm][Cc][Pp]', fnc: 'addMcp', permission: 'master' },
         { reg: '^#agents重载$', fnc: 'agentsReload', permission: 'master' },
+        { reg: '^#进化工具\\s+([\\s\\S]+)', fnc: 'toolEvoEvolve', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
         { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
@@ -1125,6 +1128,28 @@ export class Chat extends plugin {
   // ============ 在线自进化：审阅 / 采纳 / 拒绝 / 回滚（主人）============
   // 后台 SelfReviewer 每 N 轮对话自动产出 suggestion：memory 类（低风险）已自动应用；
   // skill/prompt 类（高风险）落盘待审，在此人工把关。#进化 prompt 走离线 GEPA（见 evolvePrompt）。
+
+  // ============ Tool Evolution：#进化工具 生成候选工具（主人）============
+  async toolEvoEvolve() {
+    const goal = this.e.msg.replace(/^#进化工具\s+/, '').trim()
+    if (!goal) { await this.e.reply('用法：#进化工具 <能力描述>，如\n#进化工具 提取文本中所有邮箱地址'); return true }
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.engine) { await this.e.reply('工具进化未启用（config: agent.toolEvo.enable，或 sqlite3 未装）'); return true }
+    await this.e.reply(`🧬 正在为「${goal}」生成候选工具…（LLM 生成 + typescript AST 验证，约数秒）`)
+    try {
+      const r = await rt.toolEvo.engine.evolve({ goal })
+      if (r.ok) {
+        await this.e.reply([
+          `✅ 候选已生成：${r.name}@${r.version} → draft`,
+          '待阶段2 沙箱行为验证 + #采纳 后上线（当前仅注册，不自动晋升）。',
+          r.assumptions?.length ? '假设：' + r.assumptions.join('；') : '',
+        ].filter(Boolean).join('\n'))
+      } else {
+        await this.e.reply(`❌ 候选被拒（${r.status}）：\n${r.reason}`)
+      }
+    } catch (err) { await this.e.reply('❌ 进化失败：' + (err?.message || err)) }
+    return true
+  }
 
   async reviewList() {
     let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }

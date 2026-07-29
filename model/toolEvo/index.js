@@ -8,4 +8,7 @@ export { getDb, initDb, closeDb, dao, recordInvocation, flushNow } from './db.js
 export { ToolEvoRegistry } from './registry.js'
 export { validateManifest, isGenerationAllowed, makeManifest, NAME_RE, SEMVER_RE } from './manifest.js'
 export { seedBuiltinTools } from './seed.js'
+export { ToolSynthesizer } from './synthesizer.js'
+export { default as verifyStatic, scanSource } from './verifier/static.js'
+export { EvolutionEngine } from './engine.js'
 export * as lifecycle from './lifecycle.js'

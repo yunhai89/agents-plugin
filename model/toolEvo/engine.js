@@ -1,0 +1,60 @@
+/**
+ * 进化引擎编排（阶段1：缺口 → 生成 → 静态验证 → 注册 draft）。
+ *
+ * 安全铁律（文档 §5.2）：候选仅进 draft/rejected，**禁自动晋升**（verified 需阶段2 行为验证 + 主人审批）。
+ * 失败/危险候选 reject，不入库（绝不污染 stable）。
+ *
+ * synthesizer/registry 由 apps 注入。
+ */
+import crypto from 'node:crypto'
+import { verifyStatic } from './verifier/static.js'
+
+export class EvolutionEngine {
+  constructor({ synthesizer, registry, logger = () => {} }) {
+    this.synthesizer = synthesizer
+    this.registry = registry
+    this.logger = logger
+  }
+
+  /**
+   * 针对一个能力缺口生成并验证候选。
+   * @param {object} p { goal, examples?, context?, toolId?(已有工具则建新版本), parentVersionId? }
+   * @returns { ok, versionId?, status:'draft'|'rejected', reason?, assumptions? }
+   */
+  async evolve({ goal, examples = [], context = '', toolId = null, parentVersionId = null }) {
+    // 1. 生成（含修复循环 + 本地校验 + 生成闸）
+    const gen = await this.synthesizer.generate({ goal, examples, context })
+    if (!gen.ok) return { ok: false, status: 'rejected', reason: '生成失败：' + gen.error }
+    const { manifest, source, tests, assumptions } = gen.candidate
+
+    // 2. 静态验证（typescript AST 禁用模式 + manifest schema + 导出 run）
+    const sv = verifyStatic({ manifest, source })
+    if (!sv.passed) {
+      this.logger('warn', '[toolEvo] 候选静态验证失败', sv.violations)
+      return { ok: false, status: 'rejected', reason: '静态验证：' + sv.violations.join('; ') }
+    }
+
+    // 3. 注册 draft（不入 active；禁自动晋升）
+    try {
+      let tid = toolId
+      if (!tid) {
+        const exist = await this.registry.getByName(manifest.name)
+        if (exist) tid = exist.id
+        else {
+          tid = 'tool_' + crypto.randomBytes(6).toString('hex')
+          await this.registry.createTool({ id: tid, name: manifest.name, namespace: 'evolved' })
+        }
+      }
+      const v = await this.registry.createVersion({
+        toolId: tid, semver: manifest.version, manifest, source, tests,
+        parentVersionId, generatorModel: this.synthesizer.model,
+      })
+      this.logger('mark', `[toolEvo] 候选注册 ${manifest.name}@${manifest.version} → draft（待阶段2 行为验证 + 审批）`)
+      return { ok: true, versionId: v.id, status: 'draft', assumptions, name: manifest.name, version: manifest.version }
+    } catch (e) {
+      return { ok: false, status: 'rejected', reason: '注册失败：' + (e?.message || e) }
+    }
+  }
+}
+
+export default EvolutionEngine

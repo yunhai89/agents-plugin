@@ -82,6 +82,7 @@ const SECTIONS = [
       { cmd: '#拒绝进化 +id', desc: '拒绝并删除一条 suggestion' },
       { cmd: '#回滚 +key', desc: '回滚 prompt 到内置默认（如 #回滚 agent）' },
       { cmd: '#进化 prompt +key', desc: '离线 GEPA 进化 prompt（采样轨迹→迭代→judge，约 1-3 分钟）' },
+      { cmd: '#进化工具 +能力描述', desc: '生成候选工具（LLM 生成 + typescript AST 验证 → draft，待审批上线）' },
     ],
   },
 ]
