@@ -782,6 +782,13 @@ export class Chat extends plugin {
 
   // —— AI 触发 ——
   async onTrigger() {
+    // 过滤 bot 自己发的消息：NapCat 开了 report-self-message 时，bot 的发言（如"思考中…"进度、
+    // 工具播报）会被投递回 message 事件。私聊下 onTrigger 无脑触发，若不过滤 self 会死循环——
+    // bot 发"思考中…" → 被当用户输入 → 回复 → 又发进度消息 → 再触发……（曾烧出单轮 27k token 循环）
+    const __selfId = this.e.self_id || this.e.bot?.self_id
+    if (__selfId && (String(this.e.user_id) === String(__selfId) || String(this.e.sender?.user_id || '') === String(__selfId))) {
+      return false
+    }
     // #添加mcp 交互式监听：私聊下，待接收 JSON 的用户，本条消息当作 mcpServers 配置处理
     const __uid = String(this.e.user_id)
     if (!this.e.isGroup && mcpAddPending.has(__uid)) {
