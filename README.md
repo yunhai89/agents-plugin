@@ -1,8 +1,10 @@
 <div align="center">
 
-# 🤖 agents-plugin
+# 🤖 TRSS AI Agent Plugin
 
-**基于 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) / [Miao-Yunzai](https://github.com/Le-niao/Yunzai-Bot) 的全功能 AI Agent 插件**
+> A modular AI Agent runtime for TRSS-Yunzai — LLM · Tool Calling · Memory · MCP · and self-evolving tools.
+
+**基于 [TRSS-Yunzai](https://github.com/TimeRainStarSky/Yunzai) / [Miao-Yunzai](https://github.com/Le-niao/Yunzai-Bot) 的 AI Agent 插件框架** —— 不是普通插件，而是一套可演化的 Agent Runtime：多模型对话 · 工具调用 · 长期记忆 · 人设 · 多模态识图 · MCP · 群管 · 终端 · 图片渲染，外加**工具进化（Tool Evolution）**等差异化能力。
 
 一个插件打通：多模型对话 · 工具调用 · 长期记忆 · 人设 · 多模态识图 · MCP · 群管 · 终端 · 图片渲染
 
@@ -37,6 +39,7 @@
 - **安全纵深**：工具 RBAC + 主人审批 + allowlist 免审 + 黑名单硬拦 + 注入防御，高危动作不裸奔。
 - **配置热加载 + 锅巴适配**：改配置即生效、免重启；锅巴 Web 面板可视化编辑。
 - **回复默认渲染成精美图片**：markdown → 浅色卡片图（标题 / 列表 / 代码高亮 / 表格 / 引用全支持），失败退文本。
+- **🧬 工具进化（Tool Evolution）**：Agent 经 LLM 生成新工具 → typescript AST 静态门 → 沙箱行为验证 → 主人审批上线，形成可验证 / 可回滚 / 权限不可自扩的工具生命周期（生成→验证→晋升→淘汰闭环）。
 
 ---
 
@@ -60,6 +63,31 @@
 | 📂 日志分文件 | 按会话分文件 + 图片底部会话/对话id + `#上报错误` 打包发主人 | ✅ 稳定 |
 | 🔍 统一搜索 | Tavily/Exa/Perplexity/Brave → SearXNG → DDG 兜底 | 🧪 早期 |
 | 📚 深度研究 | `#研究` 五阶段管线（规划→检索→综合→引用→评估） | 🧪 早期 |
+| 🧬 工具进化 | LLM 生成候选 → AST/沙箱验证 → 审批上线（版本化 / 可回滚 / 安全闸） | 🧪 早期 |
+
+---
+
+## 🧬 工具进化（Tool Evolution）
+
+> Agent 不再只从固定工具列表中选择——它能**生成新工具、验证、审批上线、持续改进与淘汰**，形成可演化的工具库。这是本插件相对普通 Agent 框架的核心差异点，也是搜索词 `tool evolution agent` 的入口。
+
+**完整生命周期**（安全纵深，五阶段）：
+
+```
+#进化工具 <能力描述>
+  → LLM 生成（json_schema 结构化）
+  → typescript AST 静态门（禁 require / child_process / process.env / eval / 一切 import；危险候选不入库）
+  → 沙箱行为验证（node 隔离 + 测试断言 + 性能/超时门）
+  → #采纳工具 <id>（master 审批）→ stable + 注入 → agent 经 tool_search 调用
+  → 调用埋点 → 适应度 / 失败聚类 → #工具健康 检测 → #淘汰工具 下线
+```
+
+**安全原则**（不可妥协）：
+- ① **生成闸**：只允许 `sideEffects ∈ {none, read}`；联网 / 发消息 / 删库等**固定受信适配器永不自动生成**
+- ② **可信基不可被工具进化**：DB / 验证器 / 沙箱 / 审批 / 审计由人维护，工具不能改
+- ③ **版本不可变 + 审计 + 权限单调不增 + 安全硬否决**（一票否决，非权重）
+
+**命令族**（均 master）：`#进化工具` / `#工具进化列表` / `#采纳工具` / `#淘汰工具` / `#工具健康` + Web「工具进化」管理面板。
 
 ---
 
