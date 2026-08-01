@@ -81,7 +81,9 @@ function ruleExtract(messages) {
   while ((m = rePref.exec(text))) out.push({ content: `喜欢${m[1].trim()}`, type: 'preference', level: 'L3', confidence: 0.7 })
   const reName = /(?:叫我|称呼我|以后叫我)([一-龥A-Za-z]{1,10})/g
   while ((m = reName.exec(text))) out.push({ content: `用户希望被叫"${m[1].trim()}"`, type: 'name', level: 'L4', confidence: 0.8 })
-  const reId = /(?:我是|我在|我负责|我的工作是)([一-龥A-Za-z0-9 ，]{2,20})/g
+  // 身份抽取：只匹配「我是/我负责/我的工作是」。「我在…」太易匹配临时动作（我在吃饭/我在忙/我在外面），
+  // 会把瞬时状态误提炼成长期身份（审计 §3.1）。地点类信息留给 LLM 抽取（extractEvery 节流）更准。
+  const reId = /(?:我是|我负责|我的工作是)([一-龥A-Za-z0-9 ，]{2,20})/g
   while ((m = reId.exec(text))) out.push({ content: `用户：${m[0]}`, type: 'identity', level: 'L4', confidence: 0.6 })
   return out
 }
@@ -115,6 +117,7 @@ export class RecallStore {
     halflife = { L2: 7, L3: 30, L4: 365 },
     dedup = { embed: 0.85, keyword: 0.5 },
     extractEvery = 10,
+    minScore = 0,
   } = {}) {
     if (!kv) throw new Error('RecallStore 需要 kv')
     this.kv = kv
@@ -125,6 +128,10 @@ export class RecallStore {
     this.halflife = halflife
     this.dedup = dedup
     this.extractEvery = extractEvery
+    // 召回最低综合分阈值：_score <= minScore 的条目不返回（默认 0 = 至少过滤零相似度）。
+    // 审计 §3.1：零相关记忆被自动注入会污染上下文、让模型莫名提及旧话题。空结果优于注入无关记忆。
+    // 关键词召回（jaccard）与向量召回（cosine）分值量纲不同，可由上层按需调大（如向量 0.3）。
+    this.minScore = minScore
     this._turns = new Map()
   }
 
@@ -154,12 +161,13 @@ export class RecallStore {
     return jaccard(a, b)
   }
 
-  /** 召回 topK：相似度 × 时间衰减 × 置信度加权 */
+  /** 召回 topK：相似度 × 时间衰减 × 置信度加权；_score <= minScore 的不返回（防零相关记忆污染上下文） */
   async retrieve(query, userId, topK = 5) {
     const all = await this._all(userId)
     if (!all.length) return []
     const qEmbed = this.embedFn ? await safe(this.embedFn(query)) : null
     const now = Date.now()
+    const minScore = this.minScore ?? 0
     const scored = []
     for (const mem of all) {
       const sim = this._sim(query, mem.content, qEmbed, mem.embedding)
@@ -167,7 +175,9 @@ export class RecallStore {
       const hl = this.halflife[mem.level] || 30
       const decay = Math.pow(0.5, days / hl)
       const conf = typeof mem.confidence === 'number' ? mem.confidence : 0.5
-      scored.push({ ...mem, _score: sim * decay * (0.5 + conf * 0.5), _sim: sim })
+      const score = sim * decay * (0.5 + conf * 0.5)
+      if (score <= minScore) continue // 零相似度/低于阈值不注入（审计 §3.1）
+      scored.push({ ...mem, _score: score, _sim: sim })
     }
     return scored.sort((a, b) => b._score - a._score).slice(0, topK)
   }

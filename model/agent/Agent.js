@@ -52,6 +52,43 @@ function isToolError(content) {
   return typeof content === 'string' && /"error"\s*:/.test(content)
 }
 
+/**
+ * 结构化截断 JSON 值，保证截断后仍可 JSON.parse（审计 §3.4）。
+ * - 数组：留前 N 项 + { _truncated, omitted, total }，模型知道缺了多少；
+ * - 对象：保留前若干字段 + _truncated，超长字符串字段单独裁剪；
+ * - 基本类型过长：包装成 { _truncated, value }。
+ * 避免按字符 slice 把 JSON 切成非法片段——那会让模型无法解析、不知道缺哪些字段、反复重调。
+ */
+function truncateJson(value, max) {
+  if (JSON.stringify(value).length <= max) return value
+  if (Array.isArray(value)) {
+    const total = value.length
+    const items = []
+    for (const it of value) {
+      const probe = JSON.stringify({ items: [...items, it], _truncated: true, omitted: total - items.length - 1, total })
+      if (probe.length > max) break
+      items.push(it)
+    }
+    return { items, _truncated: true, omitted: total - items.length, total }
+  }
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const k of Object.keys(value)) {
+      const next = { ...out, [k]: value[k], _truncated: true }
+      if (JSON.stringify(next).length > max && Object.keys(out).length) break
+      out[k] = value[k]
+    }
+    for (const k of Object.keys(out)) {
+      if (typeof out[k] === 'string' && out[k].length > max * 0.6) {
+        out[k] = out[k].slice(0, Math.max(80, Math.floor(max / 4))) + `…(字段截断 ${out[k].length} 字符)`
+      }
+    }
+    return { ...out, _truncated: true }
+  }
+  const s = typeof value === 'string' ? value : JSON.stringify(value)
+  return { _truncated: true, value: s.slice(0, Math.max(80, max - 80)) + `…(截断 ${s.length} 字符)` }
+}
+
 /** 失败回灌提示：注入错误 tool 结果的 _hint 字段，引导模型据实回复、勿臆测编造。
  *  注：以 JSON 字段注入（而非追加文本），保证 tool 结果仍可被 JSON.parse。 */
 const TOOL_FAIL_HINT = '这是工具返回的真实失败原因——请据此如实回复用户（勿臆测/编造其它原因）；若给出可重试方向（缺参数/权限不足/网络不可达/需先查 id）则换方式重试或指导用户。'
@@ -112,6 +149,7 @@ export class Agent {
     this._curTaskId = null // run() 内暂存，供元工具 devLog
     this._curDevScope = null
     this.messages = []
+    this._ephemeral = new Set() // 反思回环的草稿/反馈消息引用：持久化时滤除（不污染历史，审计 §3.7）
   }
 
   setHistory(messages) { this.messages = messages ? messages.map((m) => ({ ...m })) : [] }
@@ -188,6 +226,7 @@ export class Agent {
       try { memories = await this.recall.retrieve(rawText, scopeUserId, this.recallTopK) } catch { memories = null }
     }
 
+    this._ephemeral.clear() // 每 run 重置 ephemeral 标记（防跨 run 串）
     let usage = null
     let turns = 0
     let stopReason = null
@@ -288,7 +327,14 @@ export class Agent {
           this.devLog?.('reflect', { revise: !!verdict?.revise, feedback: verdict?.feedback || null, iter: reflectIter }, taskId, ctx?.devScope)
           if (verdict?.revise) {
             this.logger('mark', `[reflect] 自检发现需修正：${verdict.feedback || ''}——回环重做`)
-            this.messages.push({ role: 'user', content: `【自检反馈】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` })
+            // 草稿 assistant + 反馈 user 都标记 ephemeral：持久化时一并滤除（审计 §3.7）。这样历史里不留
+            // "草稿→反馈→修正"的内部过程，既避免反馈被误认为用户原话，也避免滤掉反馈后 asst→asst 相邻
+            // 破坏 user/assistant 严格交替（Anthropic 会拒）。
+            const draft = this.messages[this.messages.length - 1]
+            if (draft) this._ephemeral.add(draft)
+            const feedback = { role: 'user', content: `【自检反馈（系统自检，非用户输入）】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` }
+            this._ephemeral.add(feedback)
+            this.messages.push(feedback)
             continue
           }
           this.logger('debug', '[reflect] 自检通过，照常交付')
@@ -321,10 +367,12 @@ export class Agent {
     }
 
     // 持久化 session + 异步抽取记忆（按 scopeUserId 归属）
+    // 反思回环的草稿/反馈消息（_ephemeral）不入会话历史（审计 §3.7：防误认用户原话、防 asst→asst 相邻）
+    const persistMsgs = this.messages.slice(sessStart).filter((m) => !this._ephemeral.has(m))
     if (useConv) {
-      try { await this.session.appendConversation(scopeUserId, ctx.groupId, ctx.conversationId, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
+      try { await this.session.appendConversation(scopeUserId, ctx.groupId, ctx.conversationId, persistMsgs) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
     } else if (sessKey) {
-      try { await this.session.append(sessKey, this.messages.slice(sessStart)) } catch (e) { this.logger('warn', 'session 持久化失败', e) }
+      try { await this.session.append(sessKey, persistMsgs) } catch (e) { this.logger('warn', 'session 持久化失败', e) }
     }
     if (this.recall && ctx) {
       const snapshot = this.messages.slice()
@@ -629,11 +677,17 @@ export class Agent {
     return { revise: true, feedback, usage: res?.usage || null }
   }
 
-  /** 工具结果字符封顶：优先用工具自带 meta.resultCap（按类分级），否则回落全局 maxToolResultChars */
+  /** 工具结果封顶：优先 meta.resultCap，否则全局 maxToolResultChars。
+   *  结构化截断（审计 §3.4）：JSON 结果按类型裁剪并保证仍可 JSON.parse；非 JSON 文本才字符 slice。 */
   _capToolResult(content, tool) {
     const max = tool?.meta?.resultCap ?? this.maxToolResultChars
     if (!max || typeof content !== 'string' || content.length <= max) return content
-    return content.slice(0, max) + `\n…(已截断，原文 ${content.length} 字符；如需完整结果请缩小查询范围)`
+    let parsed
+    try { parsed = JSON.parse(content) } catch { parsed = undefined }
+    if (parsed === undefined) {
+      return content.slice(0, max) + `\n…(已截断，原文 ${content.length} 字符；如需完整结果请缩小查询范围)`
+    }
+    return JSON.stringify(truncateJson(parsed, max))
   }
 }
 

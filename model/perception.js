@@ -63,14 +63,27 @@ export function formatHistory(msgs, currentE, cap = 20) {
   return lines.slice(0, cap).reverse() // 适配器通常逆序返回，翻转为正序
 }
 
+/** 工具类别中文标签（与 RBAC CATEGORY_MIN 对齐） */
+const TOOL_CAT_LABEL = { query: '查询', personal: '个人', message: '消息', group_manage: '群管', system: '系统' }
+
 /**
  * 自我状态：工具清单 + MCP 协议/运行时 + 框架能力。核心让 AI"知道自己有什么"。
  */
 function selfStatus(runtime, cfg) {
   const lines = ['【自我状态】']
-  // 工具清单（排除编排用的 delegate__ 委派工具）
-  const names = (runtime?.tools?.names?.() || runtime?.agent?.tools?.names?.() || []).filter((n) => !n.startsWith('delegate__'))
-  if (names.length) lines.push(`- 可用工具：${names.join('、')}`)
+  // 工具清单：只列能力类别 + 计数（审计 §3.2）。列全量工具名会①抵消 Tool Discovery 省 token 的收益；
+  // ②模型见名无 schema 直接调用得 not_found；③形成模糊选择面降低路由准确率。需要具体工具调 tool_search。
+  const tools = (runtime?.tools?.list?.() || runtime?.agent?.tools?.list?.() || []).filter((t) => t?.name && !t.name.startsWith('delegate__'))
+  const names = tools.map((t) => t.name)
+  if (names.length) {
+    const counts = {}
+    for (const t of tools) {
+      const c = TOOL_CAT_LABEL[t.category] ? t.category : '其它'
+      counts[c] = (counts[c] || 0) + 1
+    }
+    const parts = Object.entries(counts).map(([c, n]) => `${TOOL_CAT_LABEL[c] || c}类 ${n}`)
+    lines.push(`- 可用工具：共 ${names.length} 个（${parts.join('、')}）。需要具体能力时调 \`tool_search\` 按自然语言搜索或按类别浏览——不要凭印象直接调用未下发 schema 的工具名（会得到 not_found）。`)
+  }
 
   // 终端执行能力：以 terminal 工具是否注册为准（显式告知，避免模型误判"没有能力"）
   if (names.includes('terminal')) {

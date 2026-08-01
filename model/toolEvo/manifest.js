@@ -19,6 +19,7 @@ const MANIFEST_SCHEMA = {
     name: { type: 'string', pattern: NAME_RE.source },
     version: { type: 'string', pattern: SEMVER_RE.source },
     status: { enum: STATUS },
+    category: { enum: ['query', 'personal', 'message', 'group_manage', 'system'] },
     description: { type: 'string', minLength: 6 },
     useWhen: { type: 'array', items: { type: 'string' } },
     doNotUseWhen: { type: 'array', items: { type: 'string' } },
@@ -97,6 +98,7 @@ export function makeManifest(partial) {
   return {
     version: '0.1.0',
     status: 'draft',
+    category: 'query',
     description: '',
     useWhen: [],
     doNotUseWhen: [],

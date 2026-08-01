@@ -22,6 +22,7 @@ const CANDIDATE_SCHEMA = {
       properties: {
         name: { type: 'string', pattern: '^[a-z][a-z0-9_-]*$' },
         description: { type: 'string', minLength: 6 },
+        category: { type: 'string', enum: ['query', 'personal', 'message', 'group_manage', 'system'] },
         useWhen: { type: 'array', items: { type: 'string' } },
         doNotUseWhen: { type: 'array', items: { type: 'string' } },
         tags: { type: 'array', items: { type: 'string' } },
@@ -64,6 +65,8 @@ function buildPrompt({ goal, examples, context }) {
     '   禁 require/child_process/process.env/eval/动态 import/new Function。',
     '3. inputSchema 用 JSON Schema 描述入参；tests 至少 2 个（含 1 个边界/错误用例）。',
     '4. name 小写字母+数字+连字符/下划线；description ≥6 字符说清用途与适用条件。',
+    '5. manifest.category 填权限类别：纯计算/只读 "query"（人人可用，多数工具为此）；用户私有数据 "personal"；'
+      + '发消息 "message"；群管写操作 "group_manage"；系统级 "system"。',
     examples?.length ? `\n## 参考用例\n${examples.map((e) => `- 输入:${JSON.stringify(e.input)} → 期望:${JSON.stringify(e.expected)}`).join('\n')}` : '',
     '',
     '## 输出',

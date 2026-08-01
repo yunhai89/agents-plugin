@@ -95,12 +95,14 @@ export class ToolEvoRegistry {
       [id, versionId, actor, 'toolEvo', decision, reason || null, Date.now()])
   }
 
-  /** 所有 stable 工具（供注入 ToolRegistry） */
+  /** 每工具的 active stable 版本（供注入 ToolRegistry）。
+   *  审计 §4.4：原查询返回所有 stable 按时间 DESC，apps 顺序 register 时后注册覆盖前注册，
+   *  最终留下的反而是最旧 stable。改为 JOIN tools.active_version_id——每工具只取其 active 版本。 */
   async listStable() {
     const rows = await dao.all(
       `SELECT tv.id AS version_id, tv.tool_id, tv.semver, tv.manifest_json, t.name
-       FROM tool_versions tv JOIN tools t ON t.id=tv.tool_id
-       WHERE tv.status='stable' ORDER BY tv.created_at DESC`,
+       FROM tools t JOIN tool_versions tv ON tv.id = t.active_version_id
+       WHERE tv.status='stable'`,
     )
     return rows.map((r) => ({ versionId: r.version_id, toolId: r.tool_id, name: r.name, semver: r.semver, manifest: JSON.parse(r.manifest_json) }))
   }
@@ -117,12 +119,15 @@ export class ToolEvoRegistry {
     try { mod = await import(fileUrl) }
     catch (e) { throw new Error(`加载工具制品失败（${stable.manifest.name}@${stable.semver}）：${e?.message || e}`) }
     if (typeof mod.run !== 'function') throw new Error(`工具制品未导出 run：${stable.manifest.name}@${stable.semver}`)
+    // category 用 manifest 真实类别（回落 query），不再硬编码 'evolved'——审计 §3.3：
+    // 'evolved' 不在 RBAC CATEGORY_MIN，policy 按未知类别(99)拒普通群员；且 tool_search 的
+    // CATEGORY_ORDER 不含 'evolved'，导致工具激活后不显示。来源标记放 meta.provenance。
     return {
       name: stable.manifest.name,
       description: stable.manifest.description,
       parameters: stable.manifest.inputSchema,
-      category: 'evolved',
-      meta: { toolEvoVersionId: stable.versionId, sideEffects: stable.manifest.permissions.sideEffects },
+      category: stable.manifest.category || 'query',
+      meta: { toolEvoVersionId: stable.versionId, provenance: 'evolved', sideEffects: stable.manifest.permissions?.sideEffects || ['none'] },
       async execute(params, ctx) { return mod.run(params, ctx) },
     }
   }

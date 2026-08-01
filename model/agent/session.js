@@ -195,11 +195,41 @@ function unpack(val) {
 
 /**
  * 滑动窗口裁剪，但始终保留首条消息（用户原始意图），避免长对话丢失最初目标。
- * 保留 next[0] + 最近 (window-1) 条。
+ *
+ * 按 **turn-block** 淘汰而非按消息切片（审计 §2.2）：assistant(tool_calls) 与其后的连续 tool 结果
+ * 视为一个原子块，裁剪只在块边界丢弃——绝不留下孤立的 tool 结果（其触发 assistant 已被移除会
+ * 触发 OpenAI 400 / Anthropic 语义异常）。借鉴 Agent._compactMessages 的 block 边界判定。
+ *
+ * 结果条数可能略多于 window（最后保留的块整体纳入），多几条远好过破坏 tool_call/tool_result 配对。
  */
 function trimKeepFirst(arr, window) {
   if (!Array.isArray(arr) || arr.length <= window) return arr
-  return [arr[0], ...arr.slice(arr.length - (window - 1))]
+  // 把消息分段成 turn-blocks：单条 user/assistant(text) 各成一块；
+  // assistant(tool_calls) + 其后连续 tool* 是一个原子块（不可拆）。
+  const blocks = []
+  for (let i = 0; i < arr.length;) {
+    const m = arr[i]
+    if (m && m.role === 'assistant' && m.tool_calls?.length) {
+      const block = [m]
+      let j = i + 1
+      while (j < arr.length && arr[j].role === 'tool') { block.push(arr[j]); j++ }
+      blocks.push(block)
+      i = j
+    } else {
+      blocks.push([m])
+      i++
+    }
+  }
+  // 始终保留首块（首条意图）+ 从尾部往回纳入完整块，直到累计条数 >= window
+  const head = blocks[0]
+  let keepCount = head.length
+  const tail = []
+  for (let b = blocks.length - 1; b >= 1; b--) {
+    if (keepCount >= window) break
+    tail.unshift(blocks[b])
+    keepCount += blocks[b].length
+  }
+  return [...head, ...tail.flat()]
 }
 
 function preview(msgs) {
