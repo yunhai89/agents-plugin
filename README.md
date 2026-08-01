@@ -125,9 +125,9 @@
 
 ```bash
 # Gitee（国内推荐）：
-git clone https://gitee.com/YunXi-67/agents-plugin.git ./plugins/agents-plugin
+git clone https://gitee.com/YunXi-67/trss-agent-plugin.git ./plugins/agents-plugin
 # 或 GitHub：
-git clone https://github.com/yunhai89/agents-plugin.git ./plugins/agents-plugin
+git clone https://github.com/yunhai89/trss-agent-plugin.git ./plugins/agents-plugin
 cd ./plugins/agents-plugin && npm install      # 安装 markdown 渲染依赖（marked / highlight.js）
 ```
 
