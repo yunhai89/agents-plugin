@@ -304,6 +304,21 @@
             <cfg-row name="工具调用轮次上限" desc="单次请求最多工具往返">
               <input type="number" class="input" style="width:110px" min="1" max="100" v-model.number="form.maxTurns">
             </cfg-row>
+            <cfg-row name="重复动作上限" desc="同工具+相同参数连续允许次数(超出→终止,防死循环)">
+              <input type="number" class="input" style="width:90px" min="1" v-model.number="form.loop.maxSameAction">
+            </cfg-row>
+            <cfg-row name="连续失败上限" desc="连续工具失败次数(超出→终止)">
+              <input type="number" class="input" style="width:90px" min="1" v-model.number="form.loop.maxConsecutiveFailures">
+            </cfg-row>
+            <cfg-row name="无进展窗口" desc="连续 N 步无新事实→终止">
+              <input type="number" class="input" style="width:90px" min="1" v-model.number="form.loop.noProgressWindow">
+            </cfg-row>
+            <cfg-row name="时间预算(ms)" desc="单次对话超时(0=不限)">
+              <input type="number" class="input" style="width:120px" min="0" step="1000" v-model.number="form.loop.timeBudgetMs">
+            </cfg-row>
+            <cfg-row name="token 预算" desc="单次对话 token 上限(0=不限)">
+              <input type="number" class="input" style="width:120px" min="0" step="1000" v-model.number="form.loop.tokenBudget">
+            </cfg-row>
             <cfg-row name="深度思考" desc="模型先思考再作答(更慢更耗 token)">
               <v-switch v-model="thinkingOn"/>
             </cfg-row>

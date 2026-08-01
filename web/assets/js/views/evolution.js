@@ -24,7 +24,11 @@
         catch (e) { toast(e.message, 'error') }
       }
       const decommission = async (id) => {
-        try { await window.api.post('/tevo/tools/' + id + '/decommission'); toast('已淘汰并卸载', 'info'); await load() }
+        try { await window.api.post('/tevo/tools/' + id + '/decommission'); toast('已淘汰', 'info'); await load() }
+        catch (e) { toast(e.message, 'error') }
+      }
+      const rollback = async (id) => {
+        try { const r = await window.api.post('/tevo/tools/' + id + '/rollback'); toast(r.msg || '已设为当前上线版本', 'success'); await load() }
         catch (e) { toast(e.message, 'error') }
       }
 
@@ -36,7 +40,7 @@
       const filtered = computed(() => filter.value ? list.value.filter((v) => v.status === filter.value) : list.value)
 
       onMounted(load)
-      return { list, loading, filter, filtered, stats, load, approve, decommission, STATUS }
+      return { list, loading, filter, filtered, stats, load, approve, decommission, rollback, STATUS }
     },
     template: `
     <div class="card card-pad">
@@ -63,6 +67,7 @@
           </div>
           <div class="flex gap6">
             <button v-if="v.status==='verified'" class="btn btn-primary btn-sm" @click="approve(v.id)"><v-icon name="check"/>采纳上线</button>
+            <button v-if="v.status==='stable'" class="btn btn-ghost btn-sm" @click="rollback(v.id)"><v-icon name="undo"/>设为当前</button>
             <button v-if="v.status==='stable'" class="btn btn-ghost btn-sm" @click="decommission(v.id)">淘汰</button>
           </div>
         </div>

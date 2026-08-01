@@ -179,7 +179,7 @@ router.post('/tevo/tools/:versionId/approve', asyncHandler(async (req, res) => {
   if (v.status !== 'verified') return fail(res, CODE.BAD, `仅 verified 候选可采纳（当前 ${v.status}）`)
   await reg.setStatus(req.params.versionId, 'stable', { actor: 'web:' + (req.master || 'unknown'), reason: 'web 面板采纳' })
   const stable = (await reg.listStable()).find((s) => s.versionId === req.params.versionId)
-  if (stable) r.tools.register(await reg.toToolContract(stable))
+  if (stable) r.tools.register(await reg.toToolContract(stable, r.toolEvo.runner))
   return ok(res, { versionId: req.params.versionId, status: 'stable' }, '已晋升 stable 并注入')
 }))
 
@@ -190,9 +190,40 @@ router.post('/tevo/tools/:versionId/decommission', asyncHandler(async (req, res)
   const reg = r.toolEvo.registry
   const v = await reg.getVersion(req.params.versionId)
   if (!v) return fail(res, CODE.NOTFOUND, '版本不存在')
+  // 淘汰只影响目标版本（审计 §4.1）：active 淘汰→自动回滚到另一 stable 或下线；非 active→仅 DB deprecated，注入不变
+  const tool = await reg.getById(v.tool_id)
+  const wasActive = tool?.active_version_id === req.params.versionId
   await reg.setStatus(req.params.versionId, 'deprecated', { actor: 'web:' + (req.master || 'unknown'), reason: 'web 面板淘汰' })
+  let msg = '已淘汰（非 active，注入不变）'
+  if (wasActive) {
+    const others = await reg.listVersions({ toolId: v.tool_id, status: 'stable' })
+    if (others.length) {
+      const target = others[0]
+      await reg.setActiveVersion(v.tool_id, target.id, { actor: 'web:' + (req.master || 'unknown'), reason: `淘汰 ${v.semver} 后回滚` })
+      const stable = (await reg.listStable()).find((s) => s.versionId === target.id)
+      if (stable) r.tools.register(await reg.toToolContract(stable, r.toolEvo.runner))
+      msg = `已淘汰（原 active），已回滚到 ${target.semver}`
+    } else {
+      r.tools.unregister(v.manifest.name)
+      msg = '已淘汰并下线（无其它 stable 可回滚）'
+    }
+  }
+  return ok(res, { versionId: req.params.versionId, status: 'deprecated' }, msg)
+}))
+
+// POST /api/tevo/tools/:versionId/rollback —— 切 active 到指定 stable 版本 + 重新注入（回滚，审计 §4.1）
+router.post('/tevo/tools/:versionId/rollback', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  if (!r.toolEvo?.registry) return fail(res, CODE.BAD, '工具进化未启用')
+  const reg = r.toolEvo.registry
+  const v = await reg.getVersion(req.params.versionId)
+  if (!v) return fail(res, CODE.NOTFOUND, '版本不存在')
+  if (v.status !== 'stable') return fail(res, CODE.BAD, '仅 stable 版本可设为当前上线（回滚目标须是已上线版本）')
+  await reg.setActiveVersion(v.tool_id, req.params.versionId, { actor: 'web:' + (req.master || 'unknown'), reason: 'web 面板回滚' })
   r.tools.unregister(v.manifest.name)
-  return ok(res, { versionId: req.params.versionId, status: 'deprecated' }, '已淘汰并卸载')
+  const stable = (await reg.listStable()).find((s) => s.versionId === req.params.versionId)
+  if (stable) r.tools.register(await reg.toToolContract(stable, r.toolEvo.runner))
+  return ok(res, { versionId: req.params.versionId, active: true }, `${v.manifest.name}@${v.semver} 已设为当前上线版本`)
 }))
 
 // GET /api/tevo/metrics —— 收敛指标（生成率/复用率/失败率/库紧凑度）
