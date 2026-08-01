@@ -17,6 +17,7 @@ import { ExecutionContext } from './tools/context.js'
 import { makeToolSearchTool } from './tools/tool_search.js'
 import { stringifyArgs, estimateMessages, mergeUsage } from './messages.js'
 import { tokenBreakdown, toolResultFields } from './trace/events.js'
+import { LoopGovernor } from './loop-governor.js'
 import { TEMPLATES, SERVICE_DIRECTIVE, REFLECTION_DIRECTIVE, buildToolCatalogSection, buildToolDiscoverySection, buildSkillsPromptSection, buildStickerPromptSection, buildAgentSystemPrompt } from '../prompt/index.js'
 
 const DEFAULT_IDENTITY = TEMPLATES.agent.system
@@ -93,6 +94,11 @@ function truncateJson(value, max) {
  *  注：以 JSON 字段注入（而非追加文本），保证 tool 结果仍可被 JSON.parse。 */
 const TOOL_FAIL_HINT = '这是工具返回的真实失败原因——请据此如实回复用户（勿臆测/编造其它原因）；若给出可重试方向（缺参数/权限不足/网络不可达/需先查 id）则换方式重试或指导用户。'
 
+/** LoopGovernor 触发的停止原因集合（这些 + max_turns 耗尽时，若无最终回复则强制收尾） */
+const GOVERNOR_STOP = new Set(['max_turns', 'duplicate_action', 'consecutive_failures', 'no_progress', 'time_budget', 'token_budget'])
+/** 强制收尾指令：让模型据已完成工具结果交付进展，不再调工具（审计 §2.1：预算耗尽不返回空串） */
+const GOVERNOR_WRAP_DIRECTIVE = '任务尚未完成。请根据上方已完成的工具调用与结果，向用户简要交付：①已完成的进展；②遇到的问题或失败原因；③建议的下一步。直接给出文字回复，不要再调用工具。'
+
 export class Agent {
   constructor(config = {}) {
     if (!config.provider) throw new Error('Agent 需要 provider')
@@ -141,6 +147,9 @@ export class Agent {
 
     // 回退 provider 列表（每条 {provider, model}，独立 baseURL/apiKey/protocol，可跨厂商）；主模型失败时依次尝试
     this.fallbackProviders = Array.isArray(config.fallbackProviders) ? config.fallbackProviders : []
+
+    // LoopGovernor：循环智能终止器（审计 §2.1）。config.loop 为假值则不启用（保持原 maxTurns 行为）
+    this.governor = config.loop ? new LoopGovernor(config.loop) : null
 
     // 工具按需发现（Tool Discovery）：null=全量模式；Set=按需模式（常驻核心工具 + 命中后扩充）
     this.toolDiscovery = config.toolDiscovery || null
@@ -227,6 +236,7 @@ export class Agent {
     }
 
     this._ephemeral.clear() // 每 run 重置 ephemeral 标记（防跨 run 串）
+    this.governor?.reset()
     let usage = null
     let turns = 0
     let stopReason = null
@@ -359,11 +369,56 @@ export class Agent {
         stopReason = 'clarify'
         break
       }
+
+      // LoopGovernor：上报本轮工具调用 + 检测循环停滞（审计 §2.1）。命中则终止，留给下方收尾交付
+      if (this.governor) {
+        for (let i = 0; i < result.toolCalls.length; i++) {
+          const tc = result.toolCalls[i]
+          const trm = toolResults[i]
+          const ok = !!trm && !isToolError(trm.content)
+          this.governor.noteToolCall(tc.name, tc.arguments, ok, ok)
+        }
+        const g = this.governor.shouldStop()
+        if (g.stop) {
+          stopReason = g.reason
+          this.logger('mark', `[governor] 循环终止：${g.reason}`, JSON.stringify(this.governor.snapshot()))
+          this.devLog?.('governor_stop', { reason: g.reason, ...this.governor.snapshot() }, taskId, ctx?.devScope)
+          break
+        }
+      }
     }
 
     if (!stopReason) {
       stopReason = 'max_turns'
       this.logger('warn', `Agent 达到 maxTurns(${this.maxTurns})，提前结束`)
+    }
+
+    // 强制收尾：governor 终止 / max_turns 耗尽 且未产出最终回复时，做一次"不带工具"的收尾调用，
+    // 让模型据已完成工具结果向用户交付进展（而非返回空串）。审计 §2.1。
+    if (this.governor && !lastContent && GOVERNOR_STOP.has(stopReason)) {
+      try {
+        const wrapSys = this._assembleSystem(memories, systemPromptOverride, context, scopeId).system
+        const wrap = await this.provider.chat({
+          model: this.model,
+          messages: [...this.messages, { role: 'user', content: GOVERNOR_WRAP_DIRECTIVE }],
+          system: wrapSys,
+          tools: undefined,
+          tool_choice: 'none',
+          temperature: this.temperature,
+          max_tokens: this.maxTokens,
+          thinking: this.thinking,
+          signal,
+          stream: false,
+        })
+        if (wrap?.content) {
+          lastContent = wrap.content
+          if (wrap.usage) usage = mergeUsage(usage, wrap.usage)
+          this.logger('mark', `[governor] 强制收尾（${stopReason}）：让模型总结已完成进展`)
+          this.devLog?.('governor_wrap', { reason: stopReason, contentLen: lastContent.length, usage: wrap.usage || null }, taskId, ctx?.devScope)
+        }
+      } catch (e) {
+        this.logger('warn', '[governor] 收尾调用失败（交付空回复）', e?.message || e)
+      }
     }
 
     // 持久化 session + 异步抽取记忆（按 scopeUserId 归属）

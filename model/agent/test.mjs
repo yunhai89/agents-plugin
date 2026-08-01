@@ -41,6 +41,7 @@ import { createClient as createOpenAIClient } from '../openai/index.js'
 import { presets as openaiPresets } from '../openai/index.js'
 import { createClient as createAnthropicClient } from '../anthropic/index.js'
 import { presets as anthropicPresets } from '../anthropic/index.js'
+import { LoopGovernor, fingerprint } from './loop-governor.js'
 
 let passed = 0
 let failed = 0
@@ -905,6 +906,52 @@ await test('reflect：草稿+反馈不持久化（ephemeral，审计 §3.7），
   ok(hist.some((m) => m.content === '最终回复'), '仅最终回复持久化')
   // 历史交替合法（无 asst→asst 相邻——滤掉反馈后草稿也一并滤除）
   for (let i = 1; i < hist.length; i++) ok(hist[i].role === 'user' || hist[i - 1].role !== hist[i].role, `历史交替合法 @${i}`)
+})
+
+// ---------- 审计 P0 第二批A：LoopGovernor 循环智能终止 ----------
+
+await test('LoopGovernor 单元：指纹/重复/失败/无进展/预算', async () => {
+  eq(fingerprint('ping', { x: 1 }), fingerprint('ping', { x: 1 }), '相同 args 同指纹')
+  ok(fingerprint('ping', { x: 1 }) !== fingerprint('ping', { x: 2 }), '不同 args 不同指纹')
+  ok(fingerprint('ping', { b: 1, a: 2 }) === fingerprint('ping', { a: 2, b: 1 }), '对象键顺序无关指纹')
+
+  const mk = (o) => new LoopGovernor({ maxSameAction: 99, maxConsecutiveFailures: 99, noProgressWindow: 99, timeBudgetMs: 0, tokenBudget: 0, ...o })
+  // 重复动作：maxSameAction=2 → 第3次相同停
+  const g = mk({ maxSameAction: 2 })
+  g.noteToolCall('ping', { x: 1 }, true); eq(g.shouldStop().stop, false, '第1次不停')
+  g.noteToolCall('ping', { x: 1 }, true); eq(g.shouldStop().stop, false, '第2次不停（允许2次）')
+  g.noteToolCall('ping', { x: 1 }, true); eq(g.shouldStop().reason, 'duplicate_action', '第3次相同 → duplicate_action')
+  // 连续失败：maxConsecutiveFailures=3
+  const g2 = mk({ maxConsecutiveFailures: 3 })
+  g2.noteToolCall('a', {}, false); eq(g2.shouldStop().stop, false, '失败1不停')
+  g2.noteToolCall('b', {}, false); eq(g2.shouldStop().stop, false, '失败2不停')
+  g2.noteToolCall('c', {}, false); eq(g2.shouldStop().reason, 'consecutive_failures', '失败3 → consecutive_failures')
+  // 无进展：noProgressWindow=3
+  const g3 = mk({ noProgressWindow: 3 })
+  g3.noteToolCall('a', {}, true, false); g3.noteToolCall('b', {}, true, false); eq(g3.shouldStop().stop, false, '2步无进展（窗口未满）不停')
+  g3.noteToolCall('c', {}, true, false); eq(g3.shouldStop().reason, 'no_progress', '3步无进展 → no_progress')
+  // token 预算
+  const g4 = mk({ tokenBudget: 100 })
+  g4.noteUsage({ input: 60, output: 50 }); eq(g4.shouldStop().reason, 'token_budget', 'token 超 100 → token_budget')
+})
+
+await test('Agent 集成：重复动作终止 + 强制收尾（审计 §2.1 探针）', async () => {
+  // 假 provider 每轮都调 ping({x:1})；maxTurns=3 + loop.maxSameAction=2 → 第3轮 governor 终止 + 收尾调用
+  const provider = mockProvider([
+    { toolCalls: [{ id: 'c1', name: 'ping', arguments: { x: 1 } }], finishReason: 'tool_calls' },
+    { toolCalls: [{ id: 'c2', name: 'ping', arguments: { x: 1 } }], finishReason: 'tool_calls' },
+    { toolCalls: [{ id: 'c3', name: 'ping', arguments: { x: 1 } }], finishReason: 'tool_calls' },
+    { content: '收尾：工具连续返回相同结果，已停止重试，建议换参数或换思路。', finishReason: 'stop' },
+  ])
+  const tools = new ToolRegistry().register({ name: 'ping', description: 'd', parameters: { type: 'object' }, async execute() { return { ok: true } } })
+  const agent = new Agent({
+    provider, tools, maxTurns: 3, reflect: 'off',
+    loop: { maxSameAction: 2, maxConsecutiveFailures: 99, noProgressWindow: 99, timeBudgetMs: 0, tokenBudget: 0 },
+  })
+  const res = await agent.run('ping')
+  eq(res.stopReason, 'duplicate_action', '重复动作触发 governor 终止（非 max_turns）')
+  ok(res.content.includes('收尾'), '强制收尾交付非空进展（不返回空串）')
+  eq(provider.calls.count, 4, '3 轮工具 + 1 次收尾调用')
 })
 
 // ---------- 总结 ----------
