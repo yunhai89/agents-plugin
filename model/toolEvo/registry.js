@@ -89,6 +89,21 @@ export class ToolEvoRegistry {
     return { ...v, status: to }
   }
 
+  /**
+   * 显式切换工具的 active 版本（回滚 / 切换上线版本，审计 §4.1）。
+   * 仅 stable 版本可设为 active（须是已验证+审批上线版本）；记审计。
+   * 切换后下次热重载/重启，listStable 只返回新 active → ToolRegistry 注入新版本。
+   */
+  async setActiveVersion(toolId, versionId, { actor, reason } = {}) {
+    const v = await this.getVersion(versionId)
+    if (!v) throw new Error('版本不存在')
+    if (v.tool_id !== toolId) throw new Error('版本不属于该工具')
+    if (v.status !== 'stable') throw new Error('仅 stable 版本可设为 active（回滚目标须是已上线版本）')
+    await dao.run(`UPDATE tools SET active_version_id=? WHERE id=?`, [versionId, toolId])
+    if (actor) await this._recordApproval(versionId, actor, 'rollback', reason)
+    return { toolId, activeVersionId: versionId }
+  }
+
   async _recordApproval(versionId, actor, decision, reason) {
     const id = 'ap_' + crypto.randomBytes(6).toString('hex')
     await dao.run(`INSERT INTO approval_records(id,version_id,actor,scope,decision,reason,created_at) VALUES(?,?,?,?,?,?,?)`,
@@ -108,27 +123,43 @@ export class ToolEvoRegistry {
   }
 
   /**
-   * 导出为 ToolRegistry 契约；execute = dynamic import 制品 index.js 的 run。
-   * stable 已过 AST + 行为验证（阶段1/2），运行时不再 sandbox（直接 run，性能开销小）。
-   * 制品文件不可变（版本目录），Node 模块缓存复用。
+   * 导出为 ToolRegistry 契约。execute 经隔离 runner 调用（审计 §4.2 / P0-1，F 阻断）：
+   * stable 不再主进程 import，而在常驻 worker 子进程执行；capability ctx 由 worker 冻结提供。
+   * runner 由 apps 注入；未注入则回退主进程 import（仅本地调试，仍传冻结的受限 ctx，不暴露 e/bot/fetcher）。
    */
-  async toToolContract(stable) {
+  async toToolContract(stable, runner) {
     const dir = path.join(this.artifactsDir, stable.manifest.name, stable.semver)
-    const fileUrl = pathToFileURL(path.join(dir, 'index.js')).href
-    let mod
-    try { mod = await import(fileUrl) }
-    catch (e) { throw new Error(`加载工具制品失败（${stable.manifest.name}@${stable.semver}）：${e?.message || e}`) }
-    if (typeof mod.run !== 'function') throw new Error(`工具制品未导出 run：${stable.manifest.name}@${stable.semver}`)
-    // category 用 manifest 真实类别（回落 query），不再硬编码 'evolved'——审计 §3.3：
-    // 'evolved' 不在 RBAC CATEGORY_MIN，policy 按未知类别(99)拒普通群员；且 tool_search 的
-    // CATEGORY_ORDER 不含 'evolved'，导致工具激活后不显示。来源标记放 meta.provenance。
-    return {
+    const artifactPath = pathToFileURL(path.join(dir, 'index.js')).href
+    const versionId = stable.versionId
+    const meta = { toolEvoVersionId: versionId, provenance: 'evolved', sideEffects: stable.manifest.permissions?.sideEffects || ['none'] }
+    const base = {
       name: stable.manifest.name,
       description: stable.manifest.description,
       parameters: stable.manifest.inputSchema,
-      category: stable.manifest.category || 'query',
-      meta: { toolEvoVersionId: stable.versionId, provenance: 'evolved', sideEffects: stable.manifest.permissions?.sideEffects || ['none'] },
-      async execute(params, ctx) { return mod.run(params, ctx) },
+      category: stable.manifest.category || 'query', // 真实类别（审计 §3.3），不用 'evolved'
+      meta,
+    }
+    if (runner) {
+      return {
+        ...base,
+        async execute(params) {
+          const r = await runner.invoke(versionId, { artifactPath, params })
+          if (!r.ok) throw new Error(r.error || '进化工具执行失败')
+          return r.output
+        },
+      }
+    }
+    // 回退：无 runner（本地调试 / 旧路径）——主进程 import，传冻结的受限 ctx（不暴露宿主）
+    let mod
+    try { mod = await import(artifactPath) }
+    catch (e) { throw new Error(`加载工具制品失败（${stable.manifest.name}@${stable.semver}）：${e?.message || e}`) }
+    if (typeof mod.run !== 'function') throw new Error(`工具制品未导出 run：${stable.manifest.name}@${stable.semver}`)
+    return {
+      ...base,
+      async execute(params) {
+        const ctx = Object.freeze({ now: () => new Date().toISOString(), log: () => {} })
+        return mod.run(params, ctx)
+      },
     }
   }
 }

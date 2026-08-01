@@ -26,9 +26,17 @@ export function scanSource(source) {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && ['require', 'eval'].includes(node.expression.text)) {
       violations.push(`禁止调用：${node.expression.text}`)
     }
-    // new Function(...)
-    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Function') {
-      violations.push('禁止 new Function（动态代码）')
+    // new Function(...) / Function(...) 直接调用（审计探针 Function('return process')() 可逃逸沙箱）
+    if ((ts.isNewExpression(node) || ts.isCallExpression(node)) && ts.isIdentifier(node.expression) && node.expression.text === 'Function') {
+      violations.push('禁止 Function 构造/调用（动态代码，可逃逸隔离）')
+    }
+    // globalThis.process / globalThis['process'] 动态访问宿主全局（绕过静态门拿 process/fetch 等）
+    if ((ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) && ts.isIdentifier(node.expression) && node.expression.text === 'globalThis') {
+      violations.push('禁止 globalThis 动态属性访问（可拿宿主对象绕过门禁）')
+    }
+    // fetch(...) 全局联网（进化工具不得联网；联网走固定受信适配器）
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'fetch') {
+      violations.push('禁止 fetch（进化工具不得联网）')
     }
     // process.env / process.exit
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'process') {

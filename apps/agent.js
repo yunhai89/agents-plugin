@@ -552,6 +552,9 @@ async function buildRuntime() {
       await te.initDb({ dir: path.resolve(PLUGIN_ROOT, path.dirname(cfg.toolEvo?.dbPath || 'data/evolution/tevo.db')) })
       const toolEvoRegistry = new te.ToolEvoRegistry({ artifactsDir: path.resolve(PLUGIN_ROOT, cfg.toolEvo?.artifactsDir || 'data/evolution/tools') })
       tools.setInvocationSink(te.recordInvocation)
+      // 隔离 runner（审计 §4.2 / P0-1，F 阻断）：stable 工具在常驻 worker 子进程执行，不主进程 import，
+      // capability ctx 冻结 {now,log}，不暴露 e/bot/fetcher/process；env 不透传 apiKey 等敏感变量。
+      const runner = new te.RunnerClient({ logger: Log.tag('toolEvo'), timeoutMs: cfg.toolEvo?.runnerTimeoutMs || 5000 })
       const builtins = tools.list().filter((t) => !t.meta?.mcp).map((t) => ({
         name: t.name, description: t.description, parameters: t.parameters,
         sideEffects: t.meta?.sideEffects || ['none'], tags: ['builtin'],
@@ -559,18 +562,18 @@ async function buildRuntime() {
       const seeded = await te.seedBuiltinTools(toolEvoRegistry, builtins).catch((e) => { Log.warn('[toolEvo] seed 失败', e?.message || e); return 0 })
       const synthesizer = new te.ToolSynthesizer({ provider, model: srCfg.model || cfg.utilityModel || cfg.model, maxRepairAttempts: cfg.toolEvo?.maxRepairAttempts ?? 2, logger: Log.tag('toolEvo') })
       const engine = new te.EvolutionEngine({ synthesizer, registry: toolEvoRegistry, logger: Log.tag('toolEvo') })
-      // 注入已 stable 的进化工具（重启/热重载后自动恢复，供 agent tool_search 调用）
+      // 注入已 stable 的进化工具（经 runner 隔离执行；重启/热重载后自动恢复，供 agent tool_search 调用）
       let stableCount = 0
       try {
         for (const s of await toolEvoRegistry.listStable()) {
           // 内置工具(provenance=human)由插件代码注册,不走制品注入(其 source 为空,execute 在插件代码);
           // 只注入进化产出(generated/refined,制品含 export run)
           if (s.manifest?.provenance?.kind === 'human') continue
-          try { tools.register(await toolEvoRegistry.toToolContract(s)); stableCount++ } catch (e) { Log.warn('[toolEvo] 注入 stable 失败', s.name, e?.message || e) }
+          try { tools.register(await toolEvoRegistry.toToolContract(s, runner)); stableCount++ } catch (e) { Log.warn('[toolEvo] 注入 stable 失败', s.name, e?.message || e) }
         }
       } catch (e) { Log.warn('[toolEvo] stable 注入失败', e?.message || e) }
-      toolEvo = { registry: toolEvoRegistry, engine, closeDb: te.closeDb, flushNow: te.flushNow }
-      Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具）`)
+      toolEvo = { registry: toolEvoRegistry, engine, runner, closeDb: te.closeDb, flushNow: te.flushNow }
+      Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具，stable ${stableCount} 经隔离 runner）`)
     } catch (e) { Log.warn('[toolEvo] 初始化失败（sqlite3 未装？）', e?.message || e) }
   }
 
@@ -594,6 +597,7 @@ async function buildRuntime() {
     // 留空时由 Agent 用富默认身份（model/prompt TEMPLATES.agent.system）；人设经 run opts.systemPrompt 覆盖
     systemPrompt: cfg.systemPrompt || undefined,
     maxTurns: cfg.maxTurns ?? 50,
+    loop: cfg.loop || undefined, // LoopGovernor 循环智能终止（审计 §2.1）；cfg.loop 假值则 Agent 不启用 governor
     temperature: cfg.temperature,
     maxTokens: cfg.maxTokens || null, // 控制输出长度（消除 Anthropic 硬编码 4096 / OpenAI 不发）
     thinking: cfg.thinking || null,
@@ -668,7 +672,10 @@ async function getRuntime() {
 
 /** 失效运行时单例（下一次 getRuntime 用新配置重建） */
 function invalidateRuntime() {
-  if (_runtime?.toolEvo) { try { _runtime.toolEvo.closeDb() } catch { /* noop */ } }
+  if (_runtime?.toolEvo) {
+    try { _runtime.toolEvo.runner?.stop?.() } catch { /* noop */ } // 关闭隔离 worker（审计 §4.2）
+    try { _runtime.toolEvo.closeDb() } catch { /* noop */ }
+  }
   _runtime = null
   _runtimePromise = null
   _runtimeFailed = null  // 配置已变更：清失败缓存，下次 getRuntime 用新配置重试
@@ -784,6 +791,7 @@ export class Chat extends plugin {
         { reg: '^#工具进化列表$', fnc: 'toolEvoList', permission: 'master' },
         { reg: '^#采纳工具\\s+(\\S+)', fnc: 'toolEvoAdopt', permission: 'master' },
         { reg: '^#淘汰工具\\s+(\\S+)', fnc: 'toolEvoDecommission', permission: 'master' },
+        { reg: '^#回滚工具\\s+(\\S+)\\s+(\\S+)', fnc: 'toolEvoRollback', permission: 'master' },
         { reg: '^#工具健康$', fnc: 'toolEvoHealth', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
@@ -1190,7 +1198,7 @@ export class Chat extends plugin {
     try {
       await reg.setStatus(versionId, 'stable', { actor: 'master:' + this.e.user_id, reason: '手动采纳' })
       const stable = (await reg.listStable()).find((s) => s.versionId === versionId)
-      if (stable) rt.tools.register(await reg.toToolContract(stable))
+      if (stable) rt.tools.register(await reg.toToolContract(stable, rt.toolEvo.runner))
       await this.e.reply(`✅ ${v.manifest.name}@${v.semver} 已晋升 stable 并注入\nagent 可经 tool_search 调用（工具名：${v.manifest.name}）`)
     } catch (e) { await this.e.reply('❌ 采纳失败：' + (e?.message || e)) }
     return true
@@ -1204,10 +1212,48 @@ export class Chat extends plugin {
     const v = await reg.getVersion(versionId)
     if (!v) { await this.e.reply(`版本 ${versionId} 不存在`); return true }
     try {
+      // 淘汰只影响目标版本（审计 §4.1）：目标=active → 自动回滚到另一 stable 或下线；目标≠active → 仅 DB deprecated，不影响注入
+      const tool = await reg.getById(v.tool_id)
+      const wasActive = tool?.active_version_id === versionId
       await reg.setStatus(versionId, 'deprecated', { actor: 'master:' + this.e.user_id, reason: '手动淘汰' })
-      rt.tools.unregister(v.manifest.name)
-      await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰并卸载（制品保留作审计）`)
+      if (wasActive) {
+        const others = await reg.listVersions({ toolId: v.tool_id, status: 'stable' })
+        if (others.length) {
+          const target = others[0]
+          await reg.setActiveVersion(v.tool_id, target.id, { actor: 'master:' + this.e.user_id, reason: `淘汰 ${v.semver} 后回滚` })
+          const stable = (await reg.listStable()).find((s) => s.versionId === target.id)
+          if (stable) rt.tools.register(await reg.toToolContract(stable, rt.toolEvo.runner))
+          await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰（原 active）。已自动回滚到 ${target.semver} 并重新注入。`)
+        } else {
+          rt.tools.unregister(v.manifest.name)
+          await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰并下线（无其它 stable 可回滚；制品保留作审计）`)
+        }
+      } else {
+        await this.e.reply(`🗑️ ${v.manifest.name}@${v.semver} 已淘汰（非 active，注入的 active 版本不受影响；制品保留作审计）`)
+      }
     } catch (e) { await this.e.reply('❌ 淘汰失败：' + (e?.message || e)) }
+    return true
+  }
+
+  // #回滚工具 <工具名> <semver>：切 active 到指定 stable 版本 + 重新注入（审计 §4.1 版本回滚）
+  async toolEvoRollback() {
+    const m = this.e.msg.match(/^#回滚工具\s+(\S+)\s+(\S+)/)
+    if (!m) { await this.e.reply('用法：#回滚工具 <工具名> <semver>，如\n#回滚工具 extract_email 1.0.0'); return true }
+    const [, name, semver] = m
+    let rt; try { rt = await getRuntime() } catch (e) { await this.e.reply(String(e?.message || e)); return true }
+    if (!rt?.toolEvo?.registry) { await this.e.reply('工具进化未启用'); return true }
+    const reg = rt.toolEvo.registry
+    try {
+      const tool = await reg.getByName(name)
+      if (!tool) { await this.e.reply(`工具「${name}」不存在`); return true }
+      const target = (await reg.listVersions({ toolId: tool.id, status: 'stable' })).find((vv) => vv.semver === semver)
+      if (!target) { await this.e.reply(`「${name}」无 stable 版本 ${semver}（回滚目标须是已上线版本）`); return true }
+      await reg.setActiveVersion(tool.id, target.id, { actor: 'master:' + this.e.user_id, reason: `手动回滚到 ${semver}` })
+      rt.tools.unregister(name)
+      const stable = (await reg.listStable()).find((s) => s.versionId === target.id)
+      if (stable) rt.tools.register(await reg.toToolContract(stable, rt.toolEvo.runner))
+      await this.e.reply(`↩️ ${name} 已回滚到 ${semver} 并重新注入（active 版本切换）`)
+    } catch (e) { await this.e.reply('❌ 回滚失败：' + (e?.message || e)) }
     return true
   }
 
