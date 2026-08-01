@@ -12,9 +12,7 @@ node_modules/
 # Claude Code 本地配置/技能（不入项目仓库；开发用技能放全局 ~/.claude/skills/）
 .claude/
 
-# 测试与临时检查脚本
-**/test.mjs
-**/*.test.mjs
+# 临时检查脚本（下划线开头为 dev 专用，不入库；离线测试 test.mjs 入库以支持 CI，审计 §10）
 **/_*.mjs
 
 # 运行时产物
