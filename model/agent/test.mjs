@@ -891,7 +891,7 @@ await test('_capToolResult：JSON 结果结构化截断后仍可 parse（审计 
   ok(a._capToolResult('{"a":1}') === '{"a":1}', '短 JSON 不截断')
 })
 
-await test('reflect：草稿+反馈不持久化（ephemeral，审计 §3.7），仅留最终回复', async () => {
+await test('reflect：反馈走 system 不进 messages（草稿 pop），仅留最终回复（审计 §3.7）', async () => {
   const kv = memoryKv()
   const session = new SessionStore({ kv })
   const provider = mockProvider([
@@ -901,10 +901,12 @@ await test('reflect：草稿+反馈不持久化（ephemeral，审计 §3.7），
   ])
   const agent = new Agent({ provider, session, reflect: 'always', reflectMaxIterations: 1, maxTurns: 5 })
   await agent.run('写结论', { ctx: { role: 'member', isMaster: true, userId: 'u1', groupId: 'g1' } })
+  // 反馈拼入 turn2 的 system（非 messages user）→ 模型视为系统自检指令，不当用户话（根治"你说的对…"）
+  ok(provider.calls.history[2].system.includes('自检反馈'), '反思反馈走 system（turn2 system 含自检反馈）')
+  ok(!provider.calls.history[2].messages.some((m) => m.role === 'user' && String(m.content || '').includes('自检反馈')), '反馈不进 messages（无 role:user 的自检反馈）')
   const hist = await session.get(session.key('g1', 'u1'))
-  ok(!hist.some((m) => typeof m.content === 'string' && (m.content.includes('自检反馈') || m.content === '草稿回复')), '草稿与反馈均未持久化')
+  ok(!hist.some((m) => typeof m.content === 'string' && (m.content.includes('自检反馈') || m.content === '草稿回复')), '草稿与反馈均未持久化（草稿 pop、反馈走 system）')
   ok(hist.some((m) => m.content === '最终回复'), '仅最终回复持久化')
-  // 历史交替合法（无 asst→asst 相邻——滤掉反馈后草稿也一并滤除）
   for (let i = 1; i < hist.length; i++) ok(hist[i].role === 'user' || hist[i - 1].role !== hist[i].role, `历史交替合法 @${i}`)
 })
 

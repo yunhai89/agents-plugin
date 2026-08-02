@@ -158,7 +158,7 @@ export class Agent {
     this._curTaskId = null // run() 内暂存，供元工具 devLog
     this._curDevScope = null
     this.messages = []
-    this._ephemeral = new Set() // 反思回环的草稿/反馈消息引用：持久化时滤除（不污染历史，审计 §3.7）
+    this._pendingReflect = null // 反思反馈暂存：下轮拼入 system（非 messages），防被模型当用户话（审计 §3.7）
   }
 
   setHistory(messages) { this.messages = messages ? messages.map((m) => ({ ...m })) : [] }
@@ -235,7 +235,7 @@ export class Agent {
       try { memories = await this.recall.retrieve(rawText, scopeUserId, this.recallTopK) } catch { memories = null }
     }
 
-    this._ephemeral.clear() // 每 run 重置 ephemeral 标记（防跨 run 串）
+    this._pendingReflect = null // 每 run 重置反思反馈（防跨 run 串）
     this.governor?.reset()
     let usage = null
     let turns = 0
@@ -337,14 +337,11 @@ export class Agent {
           this.devLog?.('reflect', { revise: !!verdict?.revise, feedback: verdict?.feedback || null, iter: reflectIter }, taskId, ctx?.devScope)
           if (verdict?.revise) {
             this.logger('mark', `[reflect] 自检发现需修正：${verdict.feedback || ''}——回环重做`)
-            // 草稿 assistant + 反馈 user 都标记 ephemeral：持久化时一并滤除（审计 §3.7）。这样历史里不留
-            // "草稿→反馈→修正"的内部过程，既避免反馈被误认为用户原话，也避免滤掉反馈后 asst→asst 相邻
-            // 破坏 user/assistant 严格交替（Anthropic 会拒）。
-            const draft = this.messages[this.messages.length - 1]
-            if (draft) this._ephemeral.add(draft)
-            const feedback = { role: 'user', content: `【自检反馈（系统自检，非用户输入）】${verdict.feedback || '草拟回复存在未达标之处'}。请据此修正后再给出最终回复。` }
-            this._ephemeral.add(feedback)
-            this.messages.push(feedback)
+            // 反馈走 system 而非 messages（审计 §3.7 根治）：role:'user' 的反馈会被模型当成用户说的话，
+            // 导致最终回复"你说的对…"。改为：弹起草稿 assistant（重新生成而非续写）+ 反馈存 _pendingReflect，
+            // 下一轮 _assembleSystem 拼进 system（系统指令，模型不当用户话），用后即清。
+            this.messages.pop() // 移除刚 push 的草稿 assistant
+            this._pendingReflect = verdict.feedback || '草拟回复存在未达标之处'
             continue
           }
           this.logger('debug', '[reflect] 自检通过，照常交付')
@@ -422,8 +419,8 @@ export class Agent {
     }
 
     // 持久化 session + 异步抽取记忆（按 scopeUserId 归属）
-    // 反思回环的草稿/反馈消息（_ephemeral）不入会话历史（审计 §3.7：防误认用户原话、防 asst→asst 相邻）
-    const persistMsgs = this.messages.slice(sessStart).filter((m) => !this._ephemeral.has(m))
+    // 反思草稿已 pop、反馈走 system 不进 messages，历史天然干净（无需额外过滤）
+    const persistMsgs = this.messages.slice(sessStart)
     if (useConv) {
       try { await this.session.appendConversation(scopeUserId, ctx.groupId, ctx.conversationId, persistMsgs) } catch (e) { this.logger('warn', 'conversation 持久化失败', e) }
     } else if (sessKey) {
@@ -518,7 +515,16 @@ export class Agent {
       recalledMemory, memorySnapshot, skills: skillsSection, sticker: stickerSection,
       conversationTokens: this._estimateMessagesTokens(),
     }, this.estimateTokens)
-    return { system, breakdown }
+    // 反思反馈拼入 system（非 messages）：让模型视为系统自检指令而非用户输入（审计 §3.7 根治）
+    let reflectHint = ''
+    if (this._pendingReflect) {
+      reflectHint = `
+
+【交付前自检反馈（系统自检，非用户输入，不要把本段当作用户说的话）】你上一版草拟回复存在以下不足，请据此重新给出修正后的最终回复：
+` + this._pendingReflect
+      this._pendingReflect = null // 用一次即清（仅指导紧接的下一次生成）
+    }
+    return { system: reflectHint ? system + reflectHint : system, breakdown }
   }
 
   /**
