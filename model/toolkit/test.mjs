@@ -11,7 +11,8 @@ import {
   getGroup, loadToolPacks,
 } from './index.js'
 
-const TK_URL = pathToFileURL('/root/agents-plugin/model/toolkit/index.js').href
+// 动态解析 toolkit 入口（原硬编码 /root/agents-plugin 绝对路径，CI 路径不同会 import 失败）
+const TK_URL = new URL('./index.js', import.meta.url).href
 
 let passed = 0
 let failed = 0
