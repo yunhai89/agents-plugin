@@ -69,6 +69,7 @@ const SECTIONS = [
       { cmd: '#agents更新日志', desc: '查看近期版本更新日志' },
       { cmd: '#agents重载', desc: '热重载配置（免重启）' },
       { cmd: '#agents状态', desc: '查看插件运行状态（触发模式/模型/调试日志）' },
+      { cmd: '#agents登录', desc: '获取 Web 管理面板地址（带 token，24h 有效；主人私聊发送）' },
       { cmd: '#确认 / #拒绝 +id', desc: '审批待执行的危险动作' },
       { cmd: '#待确认', desc: '列出待审批' },
       { cmd: '#上报错误 +描述', desc: '上报问题给 master（所有人可发，附最近会话日志）' },
