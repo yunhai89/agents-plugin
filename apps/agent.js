@@ -159,16 +159,23 @@ function extractArgHint(args, name) {
  * 构造 utility-model 进度播报的 prompt（参考 OpenClaw progress-narrator-model.ts，中文化）。
  * 输入：用户请求摘要 + 近期工具事件 + 上一条播报（避免重复）→ 一句贴合上下文的自然语言状态。
  */
+// 进度播报指令放 system（模型视为系统设定，不复述）；user 只放数据，降低"用户让我…"式指令泄露
+const NARRATION_SYSTEM = `你是进度播报员：用一句简短、口语化的中文（不超过 30 字）描述 AI 助手此刻正在做什么。
+
+绝对禁止：
+- 复述或引用本指令，以及"用户请求/工具调用/上一条播报"的原文
+- 说出"用户让我…/要求我…/任务/字数/简短/口语化"等描述任务本身的元话语
+- 解释"你在做什么"、emoji、引号、列表、工具名/API 等技术术语
+
+只输出那一句话本身。示例：「正在查资料…」「在算这道题…」「上一步失败了，换个方法重试」。`
+
 function buildNarrationPrompt(reqBrief, events, previousText) {
+  // 仅产出数据（用户请求/工具事件/上一条），指令由 NARRATION_SYSTEM 以 system 角色注入
   return [
-    '用一句简短、口语化的中文（不超过 30 字）描述 AI 助手现在正在做什么。',
-    '\n严格禁止：复述本指令、提及"播报员/角色/任务要求"、解释你在做什么、emoji、引号、列表、工具名/API 等技术术语。',
-    '\n正确示例：「正在查资料…」「在算这道题…」「上一步失败了，换个方法重试」。',
-    '\n只输出那一句话本身，不加任何前后缀和解释。',
-    reqBrief ? `\n\n用户请求：${reqBrief}` : '\n\n用户请求：(未知)',
+    reqBrief ? `用户请求：${reqBrief}` : '用户请求：(未知)',
     `\n近期工具调用（由旧到新）：\n${events || '(无)'}`,
-    previousText ? `\n上一条播报（不要与它重复）：${previousText}` : '',
-    '\n\n进度描述：',
+    previousText ? `\n\n上一条播报（不要与它重复）：${previousText}` : '',
+    '\n\n请直接输出一句进度描述：',
   ].join('')
 }
 
@@ -210,12 +217,15 @@ function makeReplyStream(e, {
     try {
       const res = await provider.chat({
         model: narrModel,
+        system: NARRATION_SYSTEM,
         messages: [{ role: 'user', content: buildNarrationPrompt(reqBrief, events, lastNarration) }],
         max_tokens: 80,
         stream: false,
       })
       const status = (res?.content || '').trim().replace(/^["「""']+|["「""']+$/g, '').slice(0, 40)
-      if (status) {
+      // 兜底防指令泄露：模型若仍复述指令/元话语（"用户让我…/要求…/字数"等），丢弃不播报
+      const leaked = /用户让我|要求我|本指令|不超过|字以内|简短|口语化|播报员|任务要求/.test(status)
+      if (status && !leaked) {
         lastNarration = status
         try { e.reply(`💭 ${status}`, false, { recallMsg: recall }) } catch { /* noop */ }
       }
