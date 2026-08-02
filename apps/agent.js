@@ -1016,7 +1016,7 @@ export class Chat extends plugin {
     Log.mark('[chat]', `user=${ctx.userId} gid=${ctx.groupId || '-'} conv=${ctx.conversationId} model=${cfg.model} persona=${personaId || 'default'} vision=${caps.vision ? 'on' : 'off'} thinking=${cfg.thinking ? 'on' : 'off'}${context ? ` ctx=${String(context).length}字` : ''}`)
     const wantProgress = cfg.progress !== false
     const wantStream = cfg.stream === true // 逐字流式默认关（适配器差异大）；进度反馈默认开
-    if (wantProgress) await this.e.reply('思考中…')
+    await this.e.reply('思考中…') // 触发确认：进入 agents 即回复，不受 progress 配置影响（让用户知道触发成功）
     const rs = makeReplyStream(this.e, { progress: wantProgress, recall: cfg.progressRecall ?? 3, provider: rt.provider, model: cfg.model, utilityModel: cfg.utilityModel || null, shortCircuitTools: ['clarify'], userText: text })
     try {
       // 喂给模型的首条 user 输入（追"AI 实际看到什么"：附件正文/文件名有没有进上下文、走纯文本还是多模态块、模型能力如何）
@@ -1089,7 +1089,12 @@ export class Chat extends plugin {
             stickerImgs,
           },
         })
-          if (img) { await this.e.reply(atSender ? [atSender, img] : img); delivered = true }
+          if (img) {
+            await this.e.reply(atSender ? [atSender, img] : img); delivered = true
+            // 图片模式下链接单独发文本（图内无法复制）：提取正文裸链接、去尾标点、去重后补发
+            const __links = [...new Set((body.match(/https?:\/\/[^\s<>"')]+/g) || []).map((s) => s.replace(/[.,;:!?)]+$/, '')))]
+            if (__links.length) { try { await this.e.reply(__links.join('\n')) } catch { /* noop */ } }
+          }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }
       if (!delivered) {
