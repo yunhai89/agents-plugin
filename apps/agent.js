@@ -1128,7 +1128,11 @@ export class Chat extends plugin {
     } catch (e) {
       Log.error('[chat] agent 失败', e?.message || e)
       devLog('error', { error: e?.message || String(e), stack: e?.stack || null, input: (text || '').slice(0, 200), model: cfg.model, turns: 'unknown' }, traceId, ctx?.devScope)
-      await this.e.reply(redactSecrets(`失败：${e?.message || e}`))
+      await this.e.reply([
+        redactSecrets(`⚠️ 处理时出错：${e?.message || e}`),
+        '如反复出错，请发送 #上报错误 <问题描述> 上报（自动打包会话日志给开发者）；',
+        '或加入官方 QQ 群 960179589 @群主 并附上日志反馈。',
+      ].join('\n'))
     }
     return true
   }
@@ -1420,7 +1424,10 @@ export class Chat extends plugin {
         okCnt++
       } catch (e) { Log.warn('[reportBug] 发送 master 失败', mid, e?.message || e) }
     }
-    await this.e.reply(`✅ 已上报给 ${okCnt}/${masters.length} 位 master（含最近 ${collected.length} 个会话日志）`)
+    await this.e.reply([
+      `✅ 已上报给 ${okCnt}/${masters.length} 位 master（含最近 ${collected.length} 个会话日志）`,
+      '如需进一步帮助：加入官方 QQ 群 960179589 @群主，并附上本次上报的问题描述/日志。',
+    ].join('\n'))
     return true
   }
 
