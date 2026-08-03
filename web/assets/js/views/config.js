@@ -285,7 +285,7 @@
                 <input class="input" style="width:100%" v-model="orSearch" placeholder="搜索模型 id/名称（如 gpt / claude / gemini）">
                 <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px">
                   <div v-for="m in orFiltered" :key="m.id" @click="pickOrModel(m.id)" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px">
-                    <b>{{ m.id }}</b> <span class="muted-3">{{ m.name }}<span v-if="m.context"> · {{ Math.round(m.context/1000) }}k ctx</span><span v-if="m.prompt"> · $ {{m.prompt}}/M</span></span>
+                    <b>{{ m.id }}</b> <span class="muted-3">{{ m.name }}<span v-if="m.context"> · {{ Math.round(m.context/1000) }}k ctx</span><span v-if="m.prompt"> · $ {{ (m.prompt * 1000000).toFixed(2) }}/M</span></span>
                   </div>
                 </div>
               </div>
