@@ -215,22 +215,52 @@
         mcpModal.url = ''; mcpModal.headersText = ''
         mcpModal.show = true
       }
+      // 从单个服务配置生成 UI server（含 _type + _json 或 _url/_headersText）
+      const makeSrvUi = (cfg) => {
+        if (!cfg || typeof cfg !== 'object') cfg = {}
+        if (cfg.type === 'http' || cfg.url) {
+          const headersText = cfg.headers && typeof cfg.headers === 'object' ? Object.entries(cfg.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : ''
+          return { type: 'http', url: cfg.url || '', _type: 'http', _url: cfg.url || '', _headersText: headersText }
+        }
+        const c = { command: cfg.command || 'npx', args: Array.isArray(cfg.args) ? cfg.args : [], env: cfg.env || {} }
+        return { command: c.command, args: c.args, env: c.env, _type: 'stdio', _json: JSON.stringify(c, null, 2) }
+      }
       const confirmNewMcp = () => {
-        const name = String(mcpModal.name || '').trim()
-        if (!name) { toast('请填写服务名', 'warn'); return }
         if (!form.mcp) form.mcp = {}
         if (!form.mcp.servers || typeof form.mcp.servers !== 'object') form.mcp.servers = {}
-        if (form.mcp.servers[name]) { toast('服务名已存在', 'warn'); return }
         if (mcpModal.type === 'stdio') {
-          try {
-            JSON.parse(String(mcpModal.stdioJson || '{}')) // 校验可解析
-            form.mcp.servers[name] = { command: 'npx', args: [], env: {}, _type: 'stdio', _json: String(mcpModal.stdioJson) }
-          } catch (e) { toast('stdio JSON 解析失败：' + (e?.message || e), 'error'); return }
+          let parsed
+          try { parsed = JSON.parse(String(mcpModal.stdioJson || '{}')) }
+          catch (e) { toast('stdio JSON 解析失败：' + (e?.message || e), 'error'); return }
+          // 兼容完整 {mcpServers:{name:{...}}}（Claude Desktop 格式）：批量添加，name 取自 JSON
+          if (parsed.mcpServers && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)) {
+            let added = 0
+            for (const [svName, svCfg] of Object.entries(parsed.mcpServers)) {
+              if (!svCfg || typeof svCfg !== 'object') continue
+              if (form.mcp.servers[svName]) { toast('服务「' + svName + '」已存在，跳过', 'warn'); continue }
+              form.mcp.servers[svName] = makeSrvUi(svCfg)
+              added++
+            }
+            if (!added) { toast('mcpServers 内无有效服务', 'warn'); return }
+            mcpModal.show = false
+            toast('已从 JSON 添加 ' + added + ' 个 MCP 服务', 'success')
+            return
+          }
+          // 单服务 {command,args,env}：用弹窗 name
+          const name = String(mcpModal.name || '').trim()
+          if (!name) { toast('请填写服务名，或粘贴含 mcpServers 的完整 JSON', 'warn'); return }
+          if (form.mcp.servers[name]) { toast('服务名已存在', 'warn'); return }
+          form.mcp.servers[name] = makeSrvUi(parsed)
+          mcpModal.show = false
+          toast('已添加 MCP 服务「' + name + '」', 'success')
         } else {
-          form.mcp.servers[name] = { type: 'http', url: '', _type: 'http', _url: mcpModal.url, _headersText: mcpModal.headersText }
+          const name = String(mcpModal.name || '').trim()
+          if (!name) { toast('请填写服务名', 'warn'); return }
+          if (form.mcp.servers[name]) { toast('服务名已存在', 'warn'); return }
+          form.mcp.servers[name] = { type: 'http', url: mcpModal.url || '', _type: 'http', _url: mcpModal.url || '', _headersText: mcpModal.headersText }
+          mcpModal.show = false
+          toast('已添加 MCP 服务「' + name + '」', 'success')
         }
-        mcpModal.show = false
-        toast('已添加 MCP 服务「' + name + '」', 'success')
       }
 
       /* thinking 开关兼容 */
