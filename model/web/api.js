@@ -272,6 +272,30 @@ router.get('/overview', asyncHandler(async (req, res) => {
   return ok(res, data)
 }))
 
+// ── OpenRouter（模型目录 + key 余额；config.agent.apiKey 作 Bearer）──
+// GET /api/openrouter/models —— 模型目录（公开端点，有 key 则带 Bearer）
+router.get('/openrouter/models', asyncHandler(async (req, res) => {
+  const apiKey = Config.get().agent?.apiKey
+  const r = await fetch('https://openrouter.ai/api/v1/models', { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, signal: AbortSignal.timeout(15000) }).catch(() => null)
+  if (!r?.ok) return fail(res, CODE.INTERNAL, `OpenRouter 模型列表获取失败（HTTP ${r?.status || '网络错误'}）`)
+  const data = await r.json().catch(() => null)
+  const list = (data?.data || []).map((m) => ({ id: m.id, name: m.name, context: m.context_length, prompt: m.pricing?.prompt, completion: m.pricing?.completion }))
+  return ok(res, list)
+}))
+
+// GET /api/openrouter/key —— 查询 key 余额/用量（需 agent.apiKey 为 OpenRouter key）
+router.get('/openrouter/key', asyncHandler(async (req, res) => {
+  const apiKey = Config.get().agent?.apiKey
+  if (!apiKey) return fail(res, CODE.BAD, '未配置 agent.apiKey')
+  const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) }).catch(() => null)
+  if (!r?.ok) {
+    const t = await r?.text().catch(() => '')
+    return fail(res, r?.status === 401 ? CODE.UNAUTH : CODE.INTERNAL, `OpenRouter key 查询失败（HTTP ${r?.status}）${t ? '：' + t.slice(0, 120) : ''}`)
+  }
+  const data = await r.json().catch(() => null)
+  return ok(res, data?.data || data)
+}))
+
 // ───────────────── 写操作（9 类，成功触发 Config 热加载或落盘） ─────────────────
 
 // PUT /api/config —— 点路径 changes（对齐锅巴 setConfigData）

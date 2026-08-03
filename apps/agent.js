@@ -803,6 +803,7 @@ export class Chat extends plugin {
         { reg: '^#淘汰工具\\s+(\\S+)', fnc: 'toolEvoDecommission', permission: 'master' },
         { reg: '^#回滚工具\\s+(\\S+)\\s+(\\S+)', fnc: 'toolEvoRollback', permission: 'master' },
         { reg: '^#工具健康$', fnc: 'toolEvoHealth', permission: 'master' },
+        { reg: '^#openrouter余额$', fnc: 'openrouterBalance', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
         { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
@@ -1285,6 +1286,33 @@ export class Chat extends plugin {
     if (!clusters.length) { await this.e.reply(`${head}\n\n✅ 所有 stable 工具健康（无高失败率工具）`); return true }
     const lines = clusters.map((c) => `⚠️ ${c.toolName}：失败率 ${(c.failRate * 100).toFixed(0)}%（${c.failed}/${c.total}）· ${c.topErrors.join(', ')}`)
     await this.e.reply(`${head}\n\n${lines.join('\n')}\n\n用 #进化工具 <修复描述> 生成修复候选`)
+    return true
+  }
+
+  // #openrouter余额：查 OpenRouter key 额度/用量（master；需 agent.apiKey 为 OpenRouter key）
+  async openrouterBalance() {
+    const cfg = Config.get().agent || {}
+    if (!cfg.apiKey) { await this.e.reply('未配置 agent.apiKey'); return true }
+    await this.e.reply('🔄 查询 OpenRouter key 余额…')
+    try {
+      const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${cfg.apiKey}` }, signal: AbortSignal.timeout(15000) })
+      if (!r.ok) {
+        const t = await r.text().catch(() => '')
+        await this.e.reply(`❌ 查询失败（HTTP ${r.status}）${t ? '：' + t.slice(0, 100) : ''}\n（确认 agent.preset=openrouter 且 apiKey 为 OpenRouter key）`)
+        return true
+      }
+      const d = (await r.json())?.data || {}
+      const money = (v) => (v == null ? '∞（无限制）' : `$${Number(v).toFixed(4)}`)
+      await this.e.reply([
+        '🔑 OpenRouter Key 余额',
+        `额度上限：${money(d.limit)}`,
+        `剩余额度：${money(d.limit_remaining)}`,
+        `已用（总计）：${money(d.usage)}`,
+        `已用（今日）：${money(d.usage_daily)}`,
+        `已用（本月）：${money(d.usage_monthly)}`,
+        `免费层：${d.is_free_tier ? '是' : '否（付费层）'}`,
+      ].join('\n'))
+    } catch (e) { await this.e.reply('❌ 查询失败：' + (e?.message || e)) }
     return true
   }
 

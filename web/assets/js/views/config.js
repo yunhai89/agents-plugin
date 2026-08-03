@@ -42,8 +42,8 @@
 
   const OPT = {
     trigger: [['at', '@机器人触发'], ['command', '触发词触发'], ['both', '两者皆可']],
-    protocol: [['openai', 'OpenAI 兼容'], ['anthropic', 'Anthropic 兼容']],
-    preset: [['deepseek', 'DeepSeek'], ['openai', 'OpenAI'], ['gemini', 'Gemini'], ['dashscope', '通义(DashScope)'], ['zhipu', '智谱'], ['moonshot', 'Kimi(Moonshot)'], ['mimo', '小米(MiMo)'], ['anthropic', 'Anthropic']],
+    protocol: [['openai', 'OpenAI 兼容'], ['anthropic', 'Anthropic 兼容'], ['gemini', 'Gemini 原生(官方SDK)']],
+    preset: [['deepseek', 'DeepSeek'], ['openai', 'OpenAI'], ['gemini', 'Gemini'], ['dashscope', '通义(DashScope)'], ['zhipu', '智谱'], ['moonshot', 'Kimi(Moonshot)'], ['mimo', '小米(MiMo)'], ['anthropic', 'Anthropic'], ['openrouter', 'OpenRouter(聚合)']],
     permission: [['master', '仅主人'], ['admin', '管理员'], ['owner', '群主'], ['all', '所有人']],
     guardAction: [['block', '拦截(block)'], ['flag', '隔离标注(flag)'], ['sanitize', '脱敏(sanitize)']],
     guardSensitivity: [['low', '低 (0.95)'], ['medium', '中 (0.7)'], ['high', '高 (0.5)']],
@@ -212,11 +212,35 @@
 
       const tempPct = computed(() => (form.temperature / 2) * 100 + '%')
 
+      /* OpenRouter 模型目录 + key 余额（preset=openrouter 时显示） */
+      const orModels = ref([])
+      const orSearch = ref('')
+      const orLoading = ref(false)
+      const loadOrModels = async () => {
+        orLoading.value = true
+        try { orModels.value = await window.api.get('/openrouter/models'); toast(`已加载 ${orModels.value.length} 个模型`, 'success') }
+        catch (e) { toast(e.message, 'error') }
+        finally { orLoading.value = false }
+      }
+      const orFiltered = computed(() => {
+        const q = orSearch.value.trim().toLowerCase()
+        const all = orModels.value
+        if (!q) return all.slice(0, 50)
+        return all.filter((m) => (m.id || '').toLowerCase().includes(q) || (m.name || '').toLowerCase().includes(q)).slice(0, 50)
+      })
+      const pickOrModel = (id) => { form.model = id; orSearch.value = ''; toast('已选 ' + id, 'success') }
+      const orKey = ref(null)
+      const loadOrKey = async () => {
+        try { orKey.value = await window.api.get('/openrouter/key'); toast('余额已刷新', 'success') }
+        catch (e) { toast(e.message, 'error') }
+      }
+
       return {
         form, dirty, save, reset, sections, open, activeSec, jump, OPT,
         addFallback, delFallback, masterInput, addMaster, delMaster,
         mcpServersToUi, addMcp, delMcp, renameMcp,
         thinkingOn, tempPct,
+        orModels, orSearch, orLoading, loadOrModels, orFiltered, pickOrModel, orKey, loadOrKey,
       }
     },
     template: `
@@ -256,6 +280,27 @@
             <cfg-row name="主模型 ID" desc="对话主模型">
               <input class="input" style="width:180px" v-model="form.model">
             </cfg-row>
+            <div class="full" v-if="form.preset === 'openrouter'" style="margin-top:6px;padding:10px;border:1px dashed var(--border);border-radius:10px">
+              <div class="flex between mb8">
+                <div style="font-weight:800;font-size:13px">🔍 OpenRouter 模型搜索</div>
+                <button class="btn btn-soft btn-sm" @click="loadOrModels">{{ orLoading ? '加载中…' : (orModels.length ? '已加载 '+orModels.length+' 个' : '加载模型目录') }}</button>
+              </div>
+              <div v-if="orModels.length">
+                <input class="input" style="width:100%" v-model="orSearch" placeholder="搜索模型 id/名称（如 gpt / claude / gemini）">
+                <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px">
+                  <div v-for="m in orFiltered" :key="m.id" @click="pickOrModel(m.id)" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px">
+                    <b>{{ m.id }}</b> <span class="muted-3">{{ m.name }}<span v-if="m.context"> · {{ Math.round(m.context/1000) }}k ctx</span><span v-if="m.prompt"> · ${{m.prompt}}/M</span></span>
+                  </div>
+                </div>
+              </div>
+              <div class="flex between" style="margin-top:10px">
+                <span class="muted" style="font-size:12px">Key 余额</span>
+                <button class="btn btn-ghost btn-sm" @click="loadOrKey">查询余额</button>
+              </div>
+              <div v-if="orKey" class="muted-3" style="font-size:11px;margin-top:4px">
+                剩余 ${{ orKey.limit_remaining ?? '∞' }} / 上限 ${{ orKey.limit ?? '∞' }} · 已用 ${{ orKey.usage ?? 0 }}（本月 ${{ orKey.usage_monthly ?? 0 }}）<span v-if="orKey.is_free_tier"> · 免费层</span>
+              </div>
+            </div>
             <cfg-row name="旁路小模型" desc="进度播报等旁路任务;留空=主模型">
               <input class="input" style="width:180px" v-model="form.utilityModel" placeholder="留空=主模型">
             </cfg-row>

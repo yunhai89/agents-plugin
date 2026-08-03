@@ -88,6 +88,24 @@ export const presets = {
       return { 'api-key': client.apiKey || '' }
     },
   },
+
+  /** OpenRouter（OpenAI 兼容聚合网关：数百模型 + 自动故障转移）。
+   *  baseURL: https://openrouter.ai/api/v1；可选 HTTP-Referer / X-Title 头用于排行榜标识。
+   *  模型 slug 形如 openai/gpt-4o、anthropic/claude-sonnet-4.5、google/gemini-3-flash-preview；~前缀=latest 别名。
+   *  协议层为 OpenAI 兼容（无需独立 provider）；reasoning 字段归一为 reasoning。
+   *  可选 client.httpReferer / client.appTitle（经 config 透传）注入排行榜头。 */
+  openrouter: {
+    name: 'openrouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    reasoningFields: ['reasoning'],
+    authHeaders(client) {
+      const h = {}
+      if (client.apiKey) h['Authorization'] = `Bearer ${client.apiKey}`
+      if (client.httpReferer) h['HTTP-Referer'] = client.httpReferer
+      if (client.appTitle) h['X-Title'] = client.appTitle
+      return h
+    },
+  },
 }
 
 export function getPreset(name) {

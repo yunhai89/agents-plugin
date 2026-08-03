@@ -73,6 +73,7 @@ const SECTIONS = [
       { cmd: '#确认 / #拒绝 +id', desc: '审批待执行的危险动作' },
       { cmd: '#待确认', desc: '列出待审批' },
       { cmd: '#上报错误 +描述', desc: '上报问题给 master（所有人可发，附最近会话日志）' },
+      { cmd: '#openrouter余额', desc: '查询 OpenRouter key 额度/用量（需 preset=openrouter）' },
     ],
   },
   {
