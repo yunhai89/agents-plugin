@@ -123,7 +123,8 @@
         { id: 'mcp', name: 'MCP 服务', icon: 'tool', grad: 'var(--grad-teal)' },
         { id: 'ext', name: '多模态 / 工具 / 扩展', icon: 'tool', grad: 'var(--grad-sky)' },
       ]
-      const open = reactive(Object.fromEntries(sections.map((s) => [s.id, true])))
+      // 仅「基础/模型」默认展开，其余收起（配置多时便于查找）
+      const open = reactive(Object.fromEntries(sections.map((s) => [s.id, s.id === 'basic'])))
       const activeSec = ref('basic')
       const jump = (id) => {
         open[id] = true
