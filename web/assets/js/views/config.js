@@ -162,43 +162,75 @@
       }
       const delMaster = (i) => form.masters.splice(i, 1)
 
-      /* MCP servers：对象 map 与 UI 文本双向(env/headers 对象 ↔ textarea 文本)。全部明文。
-         loadConfig/reset 后 toUi 生成 _type/_envText/_headersText；save 前 fromUi 解析回并删除临时字段。 */
+      /* MCP servers：逐个服务。stdio 粘贴单服务 JSON(command/args/env) / http 填 url+headers；
+         新建走弹窗（弹窗内始终有 stdio/http 选择） */
       const mcpServersToUi = () => {
         if (!form.mcp) form.mcp = {}
         const servers = form.mcp.servers && typeof form.mcp.servers === 'object' ? form.mcp.servers : {}
-        // 整个 mcpServers 序列化为 JSON 文本（Claude Desktop 格式 {mcpServers:{...}}），textarea 直接编辑
-        form.mcp._json = JSON.stringify({ mcpServers: JSON.parse(JSON.stringify(servers)) }, null, 2)
-      }
-      const mcpServersFromUi = () => {
-        if (!form.mcp) return
-        const raw = String(form.mcp._json || '').trim()
-        delete form.mcp._json
-        if (!raw) { form.mcp.servers = {}; return }
-        try {
-          const parsed = JSON.parse(raw)
-          const servers = parsed && parsed.mcpServers ? parsed.mcpServers : parsed // 兼容 {mcpServers:{...}} 与裸 {...}
-          if (servers && typeof servers === 'object' && !Array.isArray(servers)) form.mcp.servers = servers
-          else toast('MCP 配置应为对象：{mcpServers:{...}} 或直接服务端对象', 'error')
-        } catch (e) {
-          toast('MCP 配置 JSON 解析失败：' + (e?.message || e) + '（保留旧配置，请修正后再保存）', 'error')
+        for (const srv of Object.values(servers)) {
+          if (!srv || typeof srv !== 'object') continue
+          srv._type = srv.type === 'http' ? 'http' : 'stdio'
+          if (srv._type === 'stdio') {
+            const cfg = { command: srv.command ?? 'npx', args: Array.isArray(srv.args) ? srv.args : [], env: srv.env || {} }
+            srv._json = JSON.stringify(cfg, null, 2)
+          } else {
+            srv._url = srv.url || ''
+            srv._headersText = srv.headers && typeof srv.headers === 'object' ? Object.entries(srv.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : ''
+          }
         }
       }
-      const addMcp = () => {
+      const mcpServersFromUi = () => {
+        if (!form.mcp?.servers) return
+        for (const srv of Object.values(form.mcp.servers)) {
+          if (!srv || typeof srv !== 'object') continue
+          if (srv._type === 'stdio') {
+            try {
+              const cfg = JSON.parse(String(srv._json || '{}'))
+              srv.command = cfg.command || 'npx'
+              srv.args = Array.isArray(cfg.args) ? cfg.args : []
+              srv.env = cfg.env && typeof cfg.env === 'object' ? cfg.env : undefined
+            } catch (e) { toast('MCP stdio JSON 解析失败：' + (e?.message || e) + '（保留旧值）', 'error') }
+            delete srv.type
+          } else {
+            srv.type = 'http'
+            srv.url = String(srv._url || '')
+            const headers = {}
+            for (const line of String(srv._headersText || '').split('\n')) { const idx = line.indexOf(':'); if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim() }
+            srv.headers = Object.keys(headers).length ? headers : undefined
+          }
+          delete srv._type; delete srv._json; delete srv._url; delete srv._headersText
+        }
+      }
+      const delMcp = (name) => { if (form.mcp?.servers) delete form.mcp.servers[name] }
+
+      /* 新建 MCP 弹窗：弹窗内始终有 stdio/http 选择 */
+      const mcpModal = reactive({
+        show: false, name: '', type: 'stdio',
+        stdioJson: '{\n  "command": "npx",\n  "args": ["-y", "package-name"],\n  "env": {}\n}',
+        url: '', headersText: '',
+      })
+      const openNewMcp = () => {
+        mcpModal.name = ''; mcpModal.type = 'stdio'
+        mcpModal.stdioJson = '{\n  "command": "npx",\n  "args": ["-y", "package-name"],\n  "env": {}\n}'
+        mcpModal.url = ''; mcpModal.headersText = ''
+        mcpModal.show = true
+      }
+      const confirmNewMcp = () => {
+        const name = String(mcpModal.name || '').trim()
+        if (!name) { toast('请填写服务名', 'warn'); return }
         if (!form.mcp) form.mcp = {}
         if (!form.mcp.servers || typeof form.mcp.servers !== 'object') form.mcp.servers = {}
-        let i = 1, name = 'new-server'
-        while (form.mcp.servers[name]) name = 'new-server-' + (++i)
-        form.mcp.servers[name] = { command: 'npx', args: [], _type: 'stdio', _argsText: '[]', _envText: '', _headersText: '' }
-      }
-      const delMcp = (name) => { if (form.mcp.servers) delete form.mcp.servers[name] }
-      const renameMcp = (oldName, newName) => {
-        newName = String(newName || '').trim()
-        if (!newName || newName === oldName) return
-        if (form.mcp.servers[newName]) { toast('服务名已存在', 'warn'); return }
-        const srv = form.mcp.servers[oldName]
-        delete form.mcp.servers[oldName]
-        form.mcp.servers[newName] = srv
+        if (form.mcp.servers[name]) { toast('服务名已存在', 'warn'); return }
+        if (mcpModal.type === 'stdio') {
+          try {
+            JSON.parse(String(mcpModal.stdioJson || '{}')) // 校验可解析
+            form.mcp.servers[name] = { command: 'npx', args: [], env: {}, _type: 'stdio', _json: String(mcpModal.stdioJson) }
+          } catch (e) { toast('stdio JSON 解析失败：' + (e?.message || e), 'error'); return }
+        } else {
+          form.mcp.servers[name] = { type: 'http', url: '', _type: 'http', _url: mcpModal.url, _headersText: mcpModal.headersText }
+        }
+        mcpModal.show = false
+        toast('已添加 MCP 服务「' + name + '」', 'success')
       }
 
       /* thinking 开关兼容 */
@@ -235,7 +267,7 @@
       return {
         form, dirty, save, reset, sections, open, activeSec, jump, OPT,
         addFallback, delFallback, masterInput, addMaster, delMaster,
-        mcpServersToUi, addMcp, delMcp, renameMcp,
+        mcpServersToUi, delMcp, mcpModal, openNewMcp, confirmNewMcp,
         thinkingOn, tempPct,
         orModels, orSearch, orLoading, loadOrModels, orFiltered, pickOrModel, orKey, loadOrKey,
       }
@@ -662,13 +694,55 @@
             </cfg-row>
             <div class="full">
               <div class="flex between mb10">
-                <div style="font-weight:800;font-size:13px">MCP 服务端配置 <span class="muted-3" style="font-weight:400;font-size:11.5px">粘贴完整 mcpServers JSON（Claude Desktop 格式）</span></div>
+                <div style="font-weight:800;font-size:13px">MCP 服务端列表</div>
+                <button class="btn btn-primary btn-sm" @click="openNewMcp"><v-icon name="plus"/>新建 MCP</button>
               </div>
-              <textarea class="textarea mono" style="min-height:280px;width:100%;font-size:12px" v-model="form.mcp._json" spellcheck="false" placeholder='{ "mcpServers": { "zai-mcp-server": { "type": "stdio", "command": "npx", "args": ["-y", "@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "YOUR_API_KEY" } } } }'></textarea>
-              <div class="muted-3" style="font-size:11px;margin-top:4px">支持 stdio(command/args/env) 与 http(url/headers)；外层 mcpServers 可省略（直接粘服务端对象）。保存时解析覆盖。</div>
+              <div v-if="!(form.mcp?.servers && Object.keys(form.mcp.servers).length)" class="muted-3" style="font-size:12px;padding:8px">暂无 MCP 服务，点「新建 MCP」添加</div>
+              <div v-for="(srv, name) in (form.mcp?.servers || {})" :key="name" class="cfg-item" style="background:#fff;flex-direction:column;align-items:stretch;gap:8px">
+                <div class="flex gap6 wrap" style="align-items:center">
+                  <v-icon name="tool" style="color:var(--primary)"/>
+                  <b style="min-width:90px;font-size:13px">{{ name }}</b>
+                  <span class="chip" :class="srv._type === 'http' ? 'chip-rose' : 'chip-primary'" style="font-size:10px;padding:2px 8px">{{ srv._type }}</span>
+                  <span style="flex:1"></span>
+                  <button class="icon-btn danger" @click="delMcp(name)" title="删除"><v-icon name="trash"/></button>
+                </div>
+                <template v-if="srv._type === 'http'">
+                  <input class="input mono" style="width:100%" v-model="srv._url" placeholder="url：https://mcp.example.com/sse">
+                  <div class="muted-3" style="font-size:11px">headers（KEY: VALUE 每行一个）</div>
+                  <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._headersText" placeholder="Authorization: Bearer xxx"></textarea>
+                </template>
+                <template v-else>
+                  <div class="muted-3" style="font-size:11px">stdio 配置（粘贴单服务 JSON：command/args/env）</div>
+                  <textarea class="textarea mono" style="min-height:120px;width:100%;font-size:12px" v-model="srv._json" spellcheck="false" placeholder='{ "command": "npx", "args": ["-y", "@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "xxx" } }'></textarea>
+                </template>
+              </div>
             </div>
           </div></div>
         </div>
+
+        <!-- 新建 MCP 弹窗（弹窗内始终有 stdio/http 选择）-->
+        <v-modal v-if="mcpModal.show" title="新建 MCP 服务" icon="plus" @close="mcpModal.show = false">
+          <div class="flex gap6 wrap" style="align-items:center;margin-bottom:10px">
+            <input class="input mono" style="width:170px;font-weight:700" v-model="mcpModal.name" placeholder="服务名（如 zai-mcp-server）">
+            <select class="select" style="width:110px" v-model="mcpModal.type">
+              <option value="stdio">stdio</option>
+              <option value="http">http</option>
+            </select>
+          </div>
+          <template v-if="mcpModal.type === 'http'">
+            <input class="input mono" style="width:100%;margin-bottom:8px" v-model="mcpModal.url" placeholder="url：https://mcp.example.com/sse">
+            <div class="muted-3" style="font-size:11px;margin-bottom:4px">headers（KEY: VALUE 每行一个）</div>
+            <textarea class="textarea mono" style="min-height:80px;width:100%" v-model="mcpModal.headersText" placeholder="Authorization: Bearer xxx"></textarea>
+          </template>
+          <template v-else>
+            <div class="muted-3" style="font-size:11px;margin-bottom:4px">stdio 配置 JSON（command/args/env）</div>
+            <textarea class="textarea mono" style="min-height:140px;width:100%;font-size:12px" v-model="mcpModal.stdioJson" spellcheck="false"></textarea>
+          </template>
+          <template #foot>
+            <button class="btn btn-ghost" @click="mcpModal.show = false">取消</button>
+            <button class="btn btn-primary" @click="confirmNewMcp"><v-icon name="check"/>添加</button>
+          </template>
+        </v-modal>
 
         <!-- 保存栏 -->
         <Transition name="fade">
