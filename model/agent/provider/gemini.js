@@ -12,7 +12,6 @@
  *
  * 参考：Gemini_API_完整开发文档.md（Interactions API，2026-06 GA）。
  */
-import { GoogleGenAI } from '@google/genai'
 import { Provider, toolsToList } from './base.js'
 
 /** Agent OpenAI 风格 messages → Interactions Step[]（无状态全量历史） */
@@ -176,14 +175,33 @@ export function toAssistantResult(interaction) {
 export class GeminiProvider extends Provider {
   constructor(config = {}) {
     super(config)
-    // 已构造的 SDK 客户端优先（测试注入）；否则用 apiKey 自建
-    this.ai = config.client || new GoogleGenAI({ apiKey: config.apiKey || process.env.GEMINI_API_KEY })
+    // @google/genai 懒加载（chat 时才动态 import）：未装此包的环境也能加载本模块、用别的协议；
+    // 仅真正用 gemini 协议时才要求该包，缺失时给友好安装提示。
+    this._sdk = null
+    this._apiKey = config.apiKey || process.env.GEMINI_API_KEY
+    this._client = config.client || null
     this.defaultModel = config.model || config.defaultModel || null
+  }
+
+  /** 首次 chat 时动态 import @google/genai 并构造客户端 */
+  async _ensureClient() {
+    if (this._client) return this._client
+    if (!this._sdk) {
+      let GoogleGenAI
+      try { ({ GoogleGenAI } = await import('@google/genai')) }
+      catch (e) {
+        throw new Error('Gemini 原生适配器需要 @google/genai 包：在插件目录执行 `pnpm add @google/genai`（或 npm i @google/genai）安装。原始错误：' + (e?.message || e))
+      }
+      this._sdk = GoogleGenAI
+    }
+    this._client = new this._sdk({ apiKey: this._apiKey })
+    return this._client
   }
 
   async chat(opts = {}) {
     const model = opts.model || this.defaultModel
     if (!model) throw new Error('GeminiProvider.chat 需要 model')
+    const ai = await this._ensureClient()
     const wantStream = opts.stream === true || !!opts.onDelta
 
     const baseParams = {
@@ -198,14 +216,14 @@ export class GeminiProvider extends Provider {
     const tc = mapGeminiToolChoice(opts.tool_choice)
     if (tc) baseParams.tool_config = tc
 
-    if (wantStream) return this._chatStream(baseParams, opts)
-    const interaction = await this.ai.interactions.create(baseParams)
+    if (wantStream) return this._chatStream(baseParams, opts, ai)
+    const interaction = await ai.interactions.create(baseParams)
     return toAssistantResult(interaction)
   }
 
   /** 流式：step.delta 的 text/thought_summary 逐块回调；function_call 等结束后从 interaction 提取 */
-  async _chatStream(baseParams, opts) {
-    const stream = await this.ai.interactions.create({ ...baseParams, stream: true })
+  async _chatStream(baseParams, opts, ai) {
+    const stream = await ai.interactions.create({ ...baseParams, stream: true })
     let content = ''
     let reasoning = ''
     let interaction = null
