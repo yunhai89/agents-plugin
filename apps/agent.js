@@ -1,7 +1,7 @@
 import plugin from '../../../lib/plugins/plugin.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 import Config from '../utils/Config.js'
 import Log from '../utils/Log.js'
@@ -61,7 +61,7 @@ import { REPLY_CSS } from '../model/render/theme.js'
 import { toFileSegment } from '../utils/SendFile.js'
 
 /** 插件根目录（apps/ 的上两级）—— 用于定位 tools/ 自定义工具包目录 */
-const PLUGIN_ROOT = path.resolve(path.dirname(pathToFileURL(import.meta.url).pathname), '../..')
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 // ─── 进度反馈：工具调用时推送节流进度消息，消除"干等几十秒"的僵化感 ───
 // 真正的逐字流式依赖 QQ 适配器（icqq/napcat 差异大、编辑消息不稳），故默认只做可靠的进度反馈；
