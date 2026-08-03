@@ -290,7 +290,7 @@ router.get('/openrouter/key', asyncHandler(async (req, res) => {
   const r = await fetch('https://openrouter.ai/api/v1/key', { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15000) }).catch(() => null)
   if (!r?.ok) {
     const t = await r?.text().catch(() => '')
-    return fail(res, r?.status === 401 ? CODE.UNAUTH : CODE.INTERNAL, `OpenRouter key 查询失败（HTTP ${r?.status}）${t ? '：' + t.slice(0, 120) : ''}`)
+    return fail(res, CODE.INTERNAL, `OpenRouter key 查询失败（HTTP ${r?.status}）${r?.status === 401 ? '（agent.apiKey 非 OpenRouter key 或已失效——确认 preset=openrouter 且 apiKey 为 sk-or- 开头的 OpenRouter key）' : ''}${t ? '：' + t.slice(0, 120) : ''}`)
   }
   const data = await r.json().catch(() => null)
   return ok(res, data?.data || data)

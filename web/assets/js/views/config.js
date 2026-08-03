@@ -120,6 +120,7 @@
         { id: 'memory', name: '记忆系统', icon: 'memory', grad: 'var(--grad-amber)' },
         { id: 'evolution', name: '自进化', icon: 'evolution', grad: 'var(--grad-rose)' },
         { id: 'security', name: '权限 / 安全 / 日志', icon: 'shield', grad: 'var(--grad-primary)' },
+        { id: 'mcp', name: 'MCP 服务', icon: 'tool', grad: 'var(--grad-teal)' },
         { id: 'ext', name: '多模态 / 工具 / 扩展', icon: 'tool', grad: 'var(--grad-sky)' },
       ]
       const open = reactive(Object.fromEntries(sections.map((s) => [s.id, true])))
@@ -168,7 +169,7 @@
         for (const srv of Object.values(servers)) {
           if (!srv || typeof srv !== 'object') continue
           srv._type = srv.type === 'http' ? 'http' : 'stdio'
-          if (srv._type === 'stdio' && !Array.isArray(srv.args)) srv.args = srv.args ? [String(srv.args)] : []
+          if (srv._type === 'stdio') { const a = Array.isArray(srv.args) ? srv.args : (srv.args != null ? [String(srv.args)] : []); srv._argsText = JSON.stringify(a) }
           srv._envText = srv.env && typeof srv.env === 'object' ? Object.entries(srv.env).map(([k, v]) => `${k}=${v}`).join('\n') : ''
           srv._headersText = srv.headers && typeof srv.headers === 'object' ? Object.entries(srv.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : ''
         }
@@ -183,8 +184,15 @@
           for (const line of String(srv._headersText || '').split('\n')) { const idx = line.indexOf(':'); if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim() }
           srv.env = Object.keys(env).length ? env : undefined
           srv.headers = Object.keys(headers).length ? headers : undefined
+          if (srv._type === 'stdio') {
+            // args：textarea 粘贴 JSON 数组优先；非 JSON 退化为按空白分隔（兼容 "a b c"）
+            const raw = String(srv._argsText || '').trim()
+            if (!raw) srv.args = []
+            else if (raw[0] === '[') { try { const a = JSON.parse(raw); srv.args = Array.isArray(a) ? a.map((x) => String(x)) : [] } catch { srv.args = [raw] } }
+            else srv.args = raw.split(/\s+/).filter(Boolean)
+          }
           if (srv._type === 'http') srv.type = 'http'; else delete srv.type
-          delete srv._type; delete srv._envText; delete srv._headersText
+          delete srv._type; delete srv._envText; delete srv._headersText; delete srv._argsText
         }
       }
       const addMcp = () => {
@@ -192,7 +200,7 @@
         if (!form.mcp.servers || typeof form.mcp.servers !== 'object') form.mcp.servers = {}
         let i = 1, name = 'new-server'
         while (form.mcp.servers[name]) name = 'new-server-' + (++i)
-        form.mcp.servers[name] = { command: 'npx', args: [], _type: 'stdio', _envText: '', _headersText: '' }
+        form.mcp.servers[name] = { command: 'npx', args: [], _type: 'stdio', _argsText: '[]', _envText: '', _headersText: '' }
       }
       const delMcp = (name) => { if (form.mcp.servers) delete form.mcp.servers[name] }
       const renameMcp = (oldName, newName) => {
@@ -627,10 +635,42 @@
                 <input type="number" class="input" style="width:90px" min="1" v-model.number="form.calc.timeout">
               </div>
             </cfg-row>
+            <!-- MCP 服务端已拆到独立「MCP 服务」section -->
+
+            <div class="full" style="border:1.5px dashed #f0b6c2;border-radius:12px;padding:14px;background:linear-gradient(180deg,#fff,#fff8f9)">
+              <div class="flex gap10 mb10" style="font-weight:800;color:var(--rose)"><v-icon name="warn"/>终端执行(高危)</div>
+              <div class="cfg-grid">
+                <cfg-row name="启用 shell 执行" desc="即使有审批/黑白名单也无法 100% 安全" danger>
+                  <v-switch v-model="form.terminal.enable"/>
+                </cfg-row>
+                <cfg-row name="命令超时上限(秒)">
+                  <input type="number" class="input" style="width:110px" min="1" max="3600" v-model.number="form.terminal.maxTimeout">
+                </cfg-row>
+                <cfg-row name="沙盒镜像" desc="需先 docker pull">
+                  <input class="input mono" style="width:170px" v-model="form.terminal.image">
+                </cfg-row>
+                <cfg-row name="沙盒网络">
+                  <select class="select" style="width:190px" v-model="form.terminal.network"><option v-for="o in OPT.termNet" :value="o[0]">{{ o[1] }}</option></select>
+                </cfg-row>
+                <cfg-row class="full" name="命令黑名单" desc="命中硬拦">
+                  <tag-editor v-model="form.terminal.blocklist" placeholder="回车添加"/>
+                </cfg-row>
+              </div>
+            </div>
+          </div></div>
+        </div>
+
+        <!-- ===== MCP 服务（独立 section）===== -->
+        <div :id="'cfg-mcp'" class="card cfg-section" :class="{open: open.mcp}">
+          <div class="cfg-section-head" @click="open.mcp = !open.mcp">
+            <span class="ico" style="background:var(--grad-teal)"><v-icon name="tool"/></span>
+            <div><div class="card-title" style="font-size:14px">MCP 服务</div><div class="card-sub">MCP 协议服务端（stdio / http）· 请求超时</div></div>
+            <v-icon class="arrow" name="chevron"/>
+          </div>
+          <div class="cfg-body" v-show="open.mcp"><div class="cfg-grid">
             <cfg-row name="MCP 请求超时(ms)" desc="mcp.requestTimeout">
               <input type="number" class="input" style="width:130px" min="1000" step="1000" v-model.number="form.mcp.requestTimeout">
             </cfg-row>
-
             <div class="full">
               <div class="flex between mb10">
                 <div style="font-weight:800;font-size:13px">MCP 服务端 <span class="muted-3" style="font-weight:400;font-size:11.5px">明文编辑 · stdio(command/args/env) 与 http(url/headers)</span></div>
@@ -654,34 +694,13 @@
                     <div class="flex gap6 wrap">
                       <input class="input mono" style="width:160px" v-model="srv.command" placeholder="command：npx">
                     </div>
-                    <div class="muted-3" style="font-size:11px">args（每个参数一项）</div>
-                    <tag-editor v-model="srv.args" placeholder="回车添加，如 -y"/>
+                    <div class="muted-3" style="font-size:11px">args（粘贴 JSON 数组 <code>["-y","pkg"]</code>，或空格分隔）</div>
+                    <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._argsText" placeholder='["-y","package-name"]'></textarea>
                     <div class="muted-3" style="font-size:11px">环境变量 env（KEY=VALUE 每行一个）</div>
                     <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._envText" placeholder="NODE_ENV=production"></textarea>
                   </template>
                 </div>
                 <div v-if="!(form.mcp?.servers && Object.keys(form.mcp.servers).length)" class="muted-3" style="font-size:12px;padding:8px">暂无 MCP 服务，点「新增服务」添加</div>
-              </div>
-            </div>
-
-            <div class="full" style="border:1.5px dashed #f0b6c2;border-radius:12px;padding:14px;background:linear-gradient(180deg,#fff,#fff8f9)">
-              <div class="flex gap10 mb10" style="font-weight:800;color:var(--rose)"><v-icon name="warn"/>终端执行(高危)</div>
-              <div class="cfg-grid">
-                <cfg-row name="启用 shell 执行" desc="即使有审批/黑白名单也无法 100% 安全" danger>
-                  <v-switch v-model="form.terminal.enable"/>
-                </cfg-row>
-                <cfg-row name="命令超时上限(秒)">
-                  <input type="number" class="input" style="width:110px" min="1" max="3600" v-model.number="form.terminal.maxTimeout">
-                </cfg-row>
-                <cfg-row name="沙盒镜像" desc="需先 docker pull">
-                  <input class="input mono" style="width:170px" v-model="form.terminal.image">
-                </cfg-row>
-                <cfg-row name="沙盒网络">
-                  <select class="select" style="width:190px" v-model="form.terminal.network"><option v-for="o in OPT.termNet" :value="o[0]">{{ o[1] }}</option></select>
-                </cfg-row>
-                <cfg-row class="full" name="命令黑名单" desc="命中硬拦">
-                  <tag-editor v-model="form.terminal.blocklist" placeholder="回车添加"/>
-                </cfg-row>
               </div>
             </div>
           </div></div>
