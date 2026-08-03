@@ -289,7 +289,7 @@
                 <input class="input" style="width:100%" v-model="orSearch" placeholder="搜索模型 id/名称（如 gpt / claude / gemini）">
                 <div style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;margin-top:6px">
                   <div v-for="m in orFiltered" :key="m.id" @click="pickOrModel(m.id)" style="padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--border);font-size:12px">
-                    <b>{{ m.id }}</b> <span class="muted-3">{{ m.name }}<span v-if="m.context"> · {{ Math.round(m.context/1000) }}k ctx</span><span v-if="m.prompt"> · ${{m.prompt}}/M</span></span>
+                    <b>{{ m.id }}</b> <span class="muted-3">{{ m.name }}<span v-if="m.context"> · {{ Math.round(m.context/1000) }}k ctx</span><span v-if="m.prompt"> · $ {{m.prompt}}/M</span></span>
                   </div>
                 </div>
               </div>
@@ -298,7 +298,7 @@
                 <button class="btn btn-ghost btn-sm" @click="loadOrKey">查询余额</button>
               </div>
               <div v-if="orKey" class="muted-3" style="font-size:11px;margin-top:4px">
-                剩余 ${{ orKey.limit_remaining ?? '∞' }} / 上限 ${{ orKey.limit ?? '∞' }} · 已用 ${{ orKey.usage ?? 0 }}（本月 ${{ orKey.usage_monthly ?? 0 }}）<span v-if="orKey.is_free_tier"> · 免费层</span>
+                剩余 $ {{ orKey.limit_remaining ?? '∞' }} / 上限 $ {{ orKey.limit ?? '∞' }} · 已用 $ {{ orKey.usage ?? 0 }}（本月 $ {{ orKey.usage_monthly ?? 0 }}）<span v-if="orKey.is_free_tier"> · 免费层</span>
               </div>
             </div>
             <cfg-row name="旁路小模型" desc="进度播报等旁路任务;留空=主模型">
