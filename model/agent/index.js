@@ -20,6 +20,7 @@ export { Agent } from './Agent.js'
 export { createProvider, Provider, mapToolChoice, toolsToList } from './provider/index.js'
 export { OpenAIProvider } from './provider/openai.js'
 export { AnthropicProvider, toAnthropicMessages } from './provider/anthropic.js'
+export { GeminiProvider, toGeminiSteps } from './provider/gemini.js'
 
 export { ToolRegistry, ExecutionContext, ddgSearch, parseDDG, stripHtml, noteTools, clarifyTool, makeFailingTool, CLARIFY_TOOL_NAME } from './tools/index.js'
 

@@ -74,6 +74,41 @@ export function toAnthropicBlocks(media, { caps = {}, degrade = 'note' } = {}) {
   return blocks
 }
 
+/**
+ * Gemini Interactions 多模态块（Content_2 扁平结构：type + data(base64) + mime_type）：
+ *  image → {type:'image', data, mime_type}；audio → {type:'audio',...}；PDF → {type:'document',...}；其余降级 text。
+ *  参考 Gemini_API_完整开发文档.md §11（图像/音频/文档理解）。
+ */
+export function toGeminiBlocks(media, { caps = {}, degrade = 'note' } = {}) {
+  const blocks = []
+  for (const mf of media) {
+    if (mf.resolveError || !mf.buffer) {
+      blocks.push({ type: 'text', text: degradeNote(mf, degrade, true) })
+      continue
+    }
+    if (isImage(mf.mime)) {
+      if (caps.vision) {
+        blocks.push({ type: 'image', data: asBase64(mf.buffer), mime_type: mf.mime })
+      } else {
+        const t = degradeBlock(mf, degrade)
+        if (t) blocks.push({ type: 'text', text: t })
+      }
+      continue
+    }
+    if (mf.mime?.startsWith('audio/') && caps.vision) {
+      blocks.push({ type: 'audio', data: asBase64(mf.buffer), mime_type: mf.mime })
+      continue
+    }
+    if (mf.mime === 'application/pdf' && caps.file) {
+      blocks.push({ type: 'document', data: asBase64(mf.buffer), mime_type: 'application/pdf' })
+      continue
+    }
+    const text = fileToText(mf, degrade)
+    if (text != null) blocks.push({ type: 'text', text })
+  }
+  return blocks
+}
+
 /** data: URL（OpenAI image_url 直接收 base64 data url 或 http url） */
 function dataUrl(mf) {
   if (/^https?:\/\//i.test(mf.url || '') && mf.__preferUrl) return mf.url
@@ -128,6 +163,8 @@ export function buildUserContent(text, media, { protocol = 'openai', caps = {}, 
 
   const mediaBlocks = protocol === 'anthropic'
     ? toAnthropicBlocks(usable, { caps, degrade })
+    : protocol === 'gemini'
+    ? toGeminiBlocks(usable, { caps, degrade })
     : toOpenaiBlocks(usable, { caps, degrade })
   const textBlock = base ? [{ type: 'text', text: base }] : []
   const content = [...textBlock, ...mediaBlocks]

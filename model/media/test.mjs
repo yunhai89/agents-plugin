@@ -10,6 +10,7 @@ import {
   dedupMedia,
   toOpenaiBlocks,
   toAnthropicBlocks,
+  toGeminiBlocks,
   buildUserContent,
   createMediaService,
   listGroupFilesTool,
@@ -205,6 +206,23 @@ await test('applyLimits：超过 maxImages 标记降级', async () => {
   const files = await svc.collectActive()
   eq(files.length, 2, '都保留（标记）')
   ok(files[1].resolveError === 'limit_images', '第 2 张被标记 limit_images')
+})
+
+// ---------- Gemini 多模态块（toGeminiBlocks）----------
+await test('toGeminiBlocks：image/audio/pdf + 非视觉降级', async () => {
+  const blocks = toGeminiBlocks([
+    { kind: 'image', mime: 'image/png', buffer: PNG, name: 'a.png', bytes: 10 },
+    { kind: 'audio', mime: 'audio/wav', buffer: Buffer.from('wavdata'), name: 'r.wav', bytes: 7 },
+    { kind: 'file', mime: 'application/pdf', buffer: PDF, name: 'd.pdf', bytes: 8 },
+  ], { caps: { vision: true, file: true } })
+  eq(blocks[0].type, 'image', 'image → image 块')
+  ok(!!blocks[0].data && blocks[0].mime_type === 'image/png', 'image: data(base64) + mime_type')
+  eq(blocks[1].type, 'audio', 'audio → audio 块')
+  ok(!!blocks[1].data && blocks[1].mime_type === 'audio/wav', 'audio: data + mime_type')
+  eq(blocks[2].type, 'document', 'pdf → document 块')
+  // 非视觉降级
+  const d = toGeminiBlocks([{ kind: 'image', mime: 'image/png', buffer: PNG, name: 'a.png', bytes: 10 }], { caps: { vision: false }, degrade: 'note' })
+  eq(d[0].type, 'text', '非视觉 image 降级为 text 块')
 })
 
 // ---------- 总结 ----------

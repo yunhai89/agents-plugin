@@ -17,6 +17,8 @@ import {
   createProvider,
   OpenAIProvider,
   AnthropicProvider,
+  GeminiProvider,
+  toGeminiSteps,
   memoryKv,
   SessionStore,
   RecallStore,
@@ -954,6 +956,117 @@ await test('Agent 集成：重复动作终止 + 强制收尾（审计 §2.1 探�
   eq(res.stopReason, 'duplicate_action', '重复动作触发 governor 终止（非 max_turns）')
   ok(res.content.includes('收尾'), '强制收尾交付非空进展（不返回空串）')
   eq(provider.calls.count, 4, '3 轮工具 + 1 次收尾调用')
+})
+
+// ---------- Gemini 原生适配器（官方 SDK + Interactions API）----------
+
+await test('toGeminiSteps：user/assistant(tool_calls)/tool → Step[]', async () => {
+  const steps = toGeminiSteps([
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'foo', arguments: '{"x":1}' } }] },
+    { role: 'tool', tool_call_id: 'c1', name: 'foo', content: '{"ok":true}' },
+  ])
+  eq(steps[0].type, 'user_input', 'user → user_input')
+  eq(steps[1].type, 'function_call', 'assistant tool_calls → function_call')
+  eq(steps[1].arguments.x, 1, 'function_call arguments 解析为对象')
+  eq(steps[1].id, 'c1', 'function_call id')
+  eq(steps[2].type, 'function_result', 'tool → function_result')
+  eq(steps[2].call_id, 'c1', 'function_result call_id 关联')
+})
+
+await test('GeminiProvider：chat 工具循环（mock SDK interactions.create）', async () => {
+  const mockAi = {
+    interactions: {
+      create: async (params) => {
+        const json = JSON.stringify(params.input)
+        // 已含 function_result（工具结果轮）→ 模型给出最终文本
+        if (json.includes('function_result')) {
+          return {
+            id: 'i2', status: 'completed',
+            steps: [{ type: 'model_output', content: [{ type: 'text', text: '北京 22°C 晴' }] }],
+            usage: { total_input_tokens: 20, total_output_tokens: 8, total_tokens: 28 },
+          }
+        }
+        // 含 user_input 且提到"天气" → 模型决定调工具
+        if (json.includes('user_input') && json.includes('天气')) {
+          return {
+            id: 'i1', status: 'completed',
+            steps: [{ type: 'function_call', id: 'fc1', name: 'get_weather', arguments: { city: '北京' } }],
+            usage: { total_input_tokens: 10, total_output_tokens: 5, total_tokens: 15 },
+          }
+        }
+        return {
+          id: 'i2', status: 'completed',
+          steps: [{ type: 'model_output', content: [{ type: 'text', text: '北京 22°C 晴' }] }],
+          usage: { total_input_tokens: 20, total_output_tokens: 8, total_tokens: 28 },
+        }
+      },
+    },
+  }
+  const provider = new GeminiProvider({ client: mockAi, model: 'gemini-3.6-flash' })
+  // 第1轮：工具调用
+  const r1 = await provider.chat({
+    model: 'gemini-3.6-flash',
+    messages: [{ role: 'user', content: '北京天气' }],
+    tools: [{ name: 'get_weather', description: '查天气', parameters: { type: 'object' } }],
+  })
+  eq(r1.toolCalls?.length, 1, '工具调用轮返回 toolCalls')
+  eq(r1.toolCalls[0].name, 'get_weather', 'toolCall name')
+  eq(r1.toolCalls[0].arguments.city, '北京', 'toolCall arguments 为对象')
+  eq(r1.finishReason, 'stop', 'finishReason=stop')
+  eq(r1.usage.total, 15, 'usage.total')
+  // 第2轮：工具结果 → 文本
+  const r2 = await provider.chat({
+    model: 'gemini-3.6-flash',
+    messages: [
+      { role: 'user', content: '北京天气' },
+      { role: 'assistant', tool_calls: [{ id: 'fc1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"北京"}' } }] },
+      { role: 'tool', tool_call_id: 'fc1', name: 'get_weather', content: '{"temp":22}' },
+    ],
+  })
+  eq(r2.content, '北京 22°C 晴', '工具结果后文本回复')
+  eq(r2.finishReason, 'stop', 'finishReason=stop')
+})
+
+await test('createProvider：gemini → GeminiProvider（SDK 自建，不调 API）', async () => {
+  const p = createProvider({ protocol: 'gemini', apiKey: 'test-key', model: 'gemini-3.6-flash' })
+  ok(p instanceof GeminiProvider, 'gemini 协议 → GeminiProvider')
+  let err = null
+  try { createProvider({ protocol: 'bogus' }) } catch (e) { err = e }
+  ok(/openai.*anthropic.*gemini/.test(err?.message || ''), '未知协议错误含 gemini')
+})
+
+await test('toGeminiSteps：多模态 user content（image 块 + openai 兜底）', async () => {
+  // gemini 原生块（apps 经 media.toGeminiBlocks 产）直通
+  const steps = toGeminiSteps([{
+    role: 'user',
+    content: [
+      { type: 'text', text: '看这张图' },
+      { type: 'image', data: 'BASE64DATA', mime_type: 'image/png' },
+    ],
+  }])
+  eq(steps[0].type, 'user_input', 'user → user_input')
+  eq(steps[0].content[0].type, 'text', 'text 块保留')
+  eq(steps[0].content[1].type, 'image', 'image 块保留')
+  eq(steps[0].content[1].data, 'BASE64DATA', 'image data 透传')
+  eq(steps[0].content[1].mime_type, 'image/png', 'image mime_type 透传')
+  // openai 风格兜底（protocol 配错/旧路径）
+  const steps2 = toGeminiSteps([{
+    role: 'user',
+    content: [{ type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAA' } }],
+  }])
+  eq(steps2[0].content[0].type, 'image', 'openai image_url 兜底转 image')
+  eq(steps2[0].content[0].data, 'AAA', 'base64 data 解析')
+  eq(steps2[0].content[0].mime_type, 'image/jpeg', 'mime 解析')
+})
+
+await test('OpenRouter preset：OpenAI 兼容聚合网关（无需独立 provider）', async () => {
+  const p = openaiPresets.openrouter
+  ok(p && p.baseURL === 'https://openrouter.ai/api/v1', 'openrouter preset baseURL')
+  ok(Array.isArray(p.reasoningFields) && p.reasoningFields.includes('reasoning'), 'reasoningFields 含 reasoning')
+  // createProvider 用 openrouter preset → OpenAIProvider（OpenAI 兼容，透传聚合网关）
+  const provider = createProvider({ protocol: 'openai', ...p, apiKey: 'sk-or-test', model: 'openai/gpt-4o' })
+  ok(provider instanceof OpenAIProvider, 'openrouter 走 OpenAIProvider（OpenAI 兼容）')
 })
 
 // ---------- 总结 ----------

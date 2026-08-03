@@ -24,7 +24,7 @@
 
 import { collectFromEvent, fetchReply, extractFromMessage, extractForwardResid, kindOf, dedupMedia } from './collect.js'
 import { resolveMedia, resolveAll, inferMime, sniffMagic, asBase64, isTextLike, isImage, truncateText, mimeFromName, EXT_MIME } from './resolve.js'
-import { toOpenaiBlocks, toAnthropicBlocks, buildUserContent } from './convert.js'
+import { toOpenaiBlocks, toAnthropicBlocks, toGeminiBlocks, buildUserContent } from './convert.js'
 import { listGroupFilesTool, getGroupFileTool, readAttachmentTool, makeMediaTools } from './tool.js'
 
 /**
@@ -130,6 +130,7 @@ export {
   EXT_MIME,
   toOpenaiBlocks,
   toAnthropicBlocks,
+  toGeminiBlocks,
   buildUserContent,
   listGroupFilesTool,
   getGroupFileTool,
