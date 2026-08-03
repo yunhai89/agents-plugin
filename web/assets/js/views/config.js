@@ -164,35 +164,23 @@
       /* MCP servers：对象 map 与 UI 文本双向(env/headers 对象 ↔ textarea 文本)。全部明文。
          loadConfig/reset 后 toUi 生成 _type/_envText/_headersText；save 前 fromUi 解析回并删除临时字段。 */
       const mcpServersToUi = () => {
-        const servers = form.mcp?.servers
-        if (!servers || typeof servers !== 'object') return
-        for (const srv of Object.values(servers)) {
-          if (!srv || typeof srv !== 'object') continue
-          srv._type = srv.type === 'http' ? 'http' : 'stdio'
-          if (srv._type === 'stdio') { const a = Array.isArray(srv.args) ? srv.args : (srv.args != null ? [String(srv.args)] : []); srv._argsText = JSON.stringify(a) }
-          srv._envText = srv.env && typeof srv.env === 'object' ? Object.entries(srv.env).map(([k, v]) => `${k}=${v}`).join('\n') : ''
-          srv._headersText = srv.headers && typeof srv.headers === 'object' ? Object.entries(srv.headers).map(([k, v]) => `${k}: ${v}`).join('\n') : ''
-        }
+        if (!form.mcp) form.mcp = {}
+        const servers = form.mcp.servers && typeof form.mcp.servers === 'object' ? form.mcp.servers : {}
+        // 整个 mcpServers 序列化为 JSON 文本（Claude Desktop 格式 {mcpServers:{...}}），textarea 直接编辑
+        form.mcp._json = JSON.stringify({ mcpServers: JSON.parse(JSON.stringify(servers)) }, null, 2)
       }
       const mcpServersFromUi = () => {
-        const servers = form.mcp?.servers
-        if (!servers || typeof servers !== 'object') return
-        for (const srv of Object.values(servers)) {
-          if (!srv || typeof srv !== 'object') continue
-          const env = {}, headers = {}
-          for (const line of String(srv._envText || '').split('\n')) { const idx = line.indexOf('='); if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1) }
-          for (const line of String(srv._headersText || '').split('\n')) { const idx = line.indexOf(':'); if (idx > 0) headers[line.slice(0, idx).trim()] = line.slice(idx + 1).trim() }
-          srv.env = Object.keys(env).length ? env : undefined
-          srv.headers = Object.keys(headers).length ? headers : undefined
-          if (srv._type === 'stdio') {
-            // args：textarea 粘贴 JSON 数组优先；非 JSON 退化为按空白分隔（兼容 "a b c"）
-            const raw = String(srv._argsText || '').trim()
-            if (!raw) srv.args = []
-            else if (raw[0] === '[') { try { const a = JSON.parse(raw); srv.args = Array.isArray(a) ? a.map((x) => String(x)) : [] } catch { srv.args = [raw] } }
-            else srv.args = raw.split(/\s+/).filter(Boolean)
-          }
-          if (srv._type === 'http') srv.type = 'http'; else delete srv.type
-          delete srv._type; delete srv._envText; delete srv._headersText; delete srv._argsText
+        if (!form.mcp) return
+        const raw = String(form.mcp._json || '').trim()
+        delete form.mcp._json
+        if (!raw) { form.mcp.servers = {}; return }
+        try {
+          const parsed = JSON.parse(raw)
+          const servers = parsed && parsed.mcpServers ? parsed.mcpServers : parsed // 兼容 {mcpServers:{...}} 与裸 {...}
+          if (servers && typeof servers === 'object' && !Array.isArray(servers)) form.mcp.servers = servers
+          else toast('MCP 配置应为对象：{mcpServers:{...}} 或直接服务端对象', 'error')
+        } catch (e) {
+          toast('MCP 配置 JSON 解析失败：' + (e?.message || e) + '（保留旧配置，请修正后再保存）', 'error')
         }
       }
       const addMcp = () => {
@@ -673,35 +661,10 @@
             </cfg-row>
             <div class="full">
               <div class="flex between mb10">
-                <div style="font-weight:800;font-size:13px">MCP 服务端 <span class="muted-3" style="font-weight:400;font-size:11.5px">明文编辑 · stdio(command/args/env) 与 http(url/headers)</span></div>
-                <button class="btn btn-soft btn-sm" @click="addMcp"><v-icon name="plus"/>新增服务</button>
+                <div style="font-weight:800;font-size:13px">MCP 服务端配置 <span class="muted-3" style="font-weight:400;font-size:11.5px">粘贴完整 mcpServers JSON（Claude Desktop 格式）</span></div>
               </div>
-              <div style="display:flex;flex-direction:column;gap:10px">
-                <div v-for="(srv, name) in (form.mcp?.servers || {})" :key="name" class="cfg-item" style="background:#fff;flex-direction:column;align-items:stretch;gap:8px">
-                  <div class="flex gap6 wrap" style="align-items:center">
-                    <v-icon name="tool" style="color:var(--primary)"/>
-                    <input class="input mono" style="width:150px;font-weight:700" :value="name" @change="renameMcp(name, $event.target.value)" title="服务名(回车改名)">
-                    <select class="select" style="width:96px" v-model="srv._type"><option value="stdio">stdio</option><option value="http">http</option></select>
-                    <span style="flex:1"></span>
-                    <button class="icon-btn danger" @click="delMcp(name)" title="删除服务"><v-icon name="trash"/></button>
-                  </div>
-                  <template v-if="srv._type === 'http'">
-                    <input class="input mono" style="width:100%" v-model="srv.url" placeholder="url：https://mcp.example.com/sse">
-                    <div class="muted-3" style="font-size:11px">headers（KEY: VALUE 每行一个）</div>
-                    <textarea class="textarea mono" style="min-height:56px;width:100%" v-model="srv._headersText" placeholder="Authorization: Bearer xxx"></textarea>
-                  </template>
-                  <template v-else>
-                    <div class="flex gap6 wrap">
-                      <input class="input mono" style="width:160px" v-model="srv.command" placeholder="command：npx">
-                    </div>
-                    <div class="muted-3" style="font-size:11px">args（粘贴 JSON 数组 <code>["-y","pkg"]</code>，或空格分隔）</div>
-                    <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._argsText" placeholder='["-y","package-name"]'></textarea>
-                    <div class="muted-3" style="font-size:11px">环境变量 env（KEY=VALUE 每行一个）</div>
-                    <textarea class="textarea mono" style="min-height:48px;width:100%" v-model="srv._envText" placeholder="NODE_ENV=production"></textarea>
-                  </template>
-                </div>
-                <div v-if="!(form.mcp?.servers && Object.keys(form.mcp.servers).length)" class="muted-3" style="font-size:12px;padding:8px">暂无 MCP 服务，点「新增服务」添加</div>
-              </div>
+              <textarea class="textarea mono" style="min-height:280px;width:100%;font-size:12px" v-model="form.mcp._json" spellcheck="false" placeholder='{ "mcpServers": { "zai-mcp-server": { "type": "stdio", "command": "npx", "args": ["-y", "@z_ai/mcp-server"], "env": { "Z_AI_API_KEY": "YOUR_API_KEY" } } } }'></textarea>
+              <div class="muted-3" style="font-size:11px;margin-top:4px">支持 stdio(command/args/env) 与 http(url/headers)；外层 mcpServers 可省略（直接粘服务端对象）。保存时解析覆盖。</div>
             </div>
           </div></div>
         </div>
