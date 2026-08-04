@@ -1032,6 +1032,7 @@ export class Chat extends plugin {
         : ''
       devLog('input', {
         caps: { vision: !!caps.vision, file: !!caps.file },
+        protocol: cfg.protocol, preset: cfg.preset ?? null, baseURL: cfg.baseURL || null, // 诊断 404/超时：确认用户配的端点
         inputKind: Array.isArray(input?.content) ? 'multimodal' : 'text',
         blocks: Array.isArray(input?.content) ? input.content.map((b) => ({ type: b.type, textLen: (b.text || '').length, isMedia: b.type !== 'text' })) : null,
         inputText: __inputText, // 喂给模型的全部文本（含附件正文/降级说明；trace 不截断）——看附件有没有带文件名
