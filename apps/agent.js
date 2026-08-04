@@ -1042,8 +1042,11 @@ export class Chat extends plugin {
         inputText: __inputText, // 喂给模型的全部文本（含附件正文/降级说明；trace 不截断）——看附件有没有带文件名
         attachments: (ctx.media || []).map((f) => ({ name: f.name, source: f.source, kind: f.kind, bytes: f.bytes ?? null, status: f.resolveError || 'ok' })),
       }, traceId, ctx.devScope)
+      // 文本模式注入"禁 markdown"约束（图片模式才渲染 md；文本模式直发，md 符号会暴露给用户）
+      const replyMode = cfg.reply?.mode || 'image'
+      const __textHint = replyMode === 'text' ? '\n\n【回复格式·纯文本】当前为纯文本回复模式，禁止使用任何 Markdown 语法（如 **粗体**、# 标题、- 列表、`代码`、[链接](url)、代码块等符号）。直接输出可读的自然段落，用空行分段；需要层次用「」或「一、二、」编号，不用 markdown。' : ''
       const { content, stopReason, turns, usage } = await rt.makeAgent().run(input, {
-        ctx, systemPrompt, context,
+        ctx, systemPrompt, context: context ? context + __textHint : __textHint.trim(),
         taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
@@ -1067,8 +1070,7 @@ export class Chat extends plugin {
       const acceptMap = (rt.sticker && body) ? rt.sticker.decide(body, ctx) : null
       // 群聊回复艾特发言人（agent.reply.atSender，默认开；私聊不艾特）
       const atSender = (ctx.isGroup && cfg.reply?.atSender !== false && ctx.userId && typeof segment !== 'undefined') ? segment.at(ctx.userId) : null
-      // 回复渲染：默认图片（markdown→图片，失败退文本）；agent.reply.mode: text 可关
-      const replyMode = cfg.reply?.mode || 'image'
+      // 回复渲染：默认图片（markdown→图片，失败退文本）；replyMode 已在上方 run 前计算
       let delivered = false
       if (replyMode === 'image' && body) {
         try {
