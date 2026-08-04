@@ -95,10 +95,7 @@
 
       const save = async () => {
         mcpServersFromUi()
-        const frm = JSON.parse(JSON.stringify(form))
-        console.log('[config save] masters: orig=%o form=%o', origSnapshot.masters, frm.masters)
-        const changes = buildChanges(origSnapshot, frm)
-        console.log('[config save] changes=%o', changes)
+        const changes = buildChanges(origSnapshot, JSON.parse(JSON.stringify(form)))
         if (!Object.keys(changes).length) { toast('无改动', 'warn'); return }
         try {
           await window.api.put('/config', { changes })
@@ -158,12 +155,13 @@
       const masterInput = ref('')
       const addMaster = () => {
         const v = masterInput.value.trim()
-        if (/^\d{5,11}$/.test(v)) {
-          if (!form.masters.includes(v)) form.masters.push(v)
-          masterInput.value = ''
-        } else toast('QQ 号格式不正确', 'warn')
+        if (!v) return
+        if (!/^\d{5,11}$/.test(v)) { toast('QQ 号需 5-11 位数字', 'warn'); return }
+        // 整体替换新数组（而非 push）：确保 reactive set 触发，push/splice 偶发不更新 UI/脏标记
+        if (!form.masters.includes(v)) form.masters = [...form.masters, v]
+        masterInput.value = ''
       }
-      const delMaster = (i) => form.masters.splice(i, 1)
+      const delMaster = (i) => { form.masters = form.masters.filter((_, j) => j !== i) }
 
       /* MCP servers：逐个服务。stdio 粘贴单服务 JSON(command/args/env) / http 填 url+headers；
          新建走弹窗（弹窗内始终有 stdio/http 选择） */
