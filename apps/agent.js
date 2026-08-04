@@ -250,9 +250,6 @@ function makeReplyStream(e, {
       const hint = extractArgHint(tc?.arguments, name)
       const msg = hint ? `${label}：${hint}` : `${label}…`
       try { e.reply(msg, false, { recallMsg: recall }) } catch { /* noop */ }
-      // utility narrator：记录事件 + fire-and-forget 触发
-      toolEvents.push(msg.replace(/…$/, ''))
-      tryNarrate() // 不 await，不阻塞主循环
     },
     // 工具结束（含失败）：检测到失败时，立即触发一次贴合上下文的自然语言播报（"搜索没响应，换方法重试"）
     onToolEnd(tc, content) {
@@ -264,9 +261,7 @@ function makeReplyStream(e, {
         if (/"error"\s*:/.test(s) || /rejected_by_(policy|confirm)/.test(s) || /Tool '.*' not found/.test(s)) failed = true
       }
       if (!failed) return
-      const label = PROGRESS_LABELS[name] || name
-      toolEvents.push(`${label}失败`)
-      tryNarrate({ immediate: true })
+      // 工具失败：主模型会据 error 结果回复用户，不再用 utility model 额外 💭 播报（narrator 已移除）
     },
   }
 }
