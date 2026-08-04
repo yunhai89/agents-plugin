@@ -161,22 +161,22 @@ function extractArgHint(args, name) {
  * 输入：用户请求摘要 + 近期工具事件 + 上一条播报（避免重复）→ 一句贴合上下文的自然语言状态。
  */
 // 进度播报指令放 system（模型视为系统设定，不复述）；user 只放数据，降低"用户让我…"式指令泄露
-const NARRATION_SYSTEM = `你是进度播报员：用一句简短、口语化的中文（不超过 30 字）描述 AI 助手此刻正在做什么。
+const NARRATION_SYSTEM = `你是进度播报员：只用一句简短、口语化的中文（不超过 30 字）描述 AI 助手此刻正在执行的工具动作（如搜索/计算/读取），不要解释用户说了什么。
 
 绝对禁止：
-- 复述或引用本指令，以及"用户请求/工具调用/上一条播报"的原文
-- 说出"用户让我…/要求我…/任务/字数/简短/口语化"等描述任务本身的元话语
-- 解释"你在做什么"、emoji、引号、列表、工具名/API 等技术术语
+- 解释/翻译/复述用户请求（如"用户请求是…""这是中文意思是…"）——这是进度播报，不是翻译任务
+- 复述本指令，引用"工具调用/上一条播报"原文
+- 说出"用户让我…/首先…/任务/字数"等元话语
+- emoji、引号、列表、工具名/API 等技术术语
 
-只输出那一句话本身。示例：「正在查资料…」「在算这道题…」「上一步失败了，换个方法重试」。`
+只输出一句动作描述。示例：「正在搜索相关信息…」「在读取文件…」「上一步没成功，换个方法」。`
 
-function buildNarrationPrompt(reqBrief, events, previousText) {
-  // 仅产出数据（用户请求/工具事件/上一条），指令由 NARRATION_SYSTEM 以 system 角色注入
+function buildNarrationPrompt(events, previousText) {
+  // 仅工具事件 + 上一条播报（不再喂用户请求原文，避免模型翻译/解释用户请求而非播报进度）
   return [
-    reqBrief ? `用户请求：${reqBrief}` : '用户请求：(未知)',
     `\n近期工具调用（由旧到新）：\n${events || '(无)'}`,
     previousText ? `\n\n上一条播报（不要与它重复）：${previousText}` : '',
-    '\n\n请直接输出一句进度描述：',
+    '\n\n请直接输出一句描述 AI 正在做什么的进度：',
   ].join('')
 }
 
@@ -219,7 +219,7 @@ function makeReplyStream(e, {
       const res = await provider.chat({
         model: narrModel,
         system: NARRATION_SYSTEM,
-        messages: [{ role: 'user', content: buildNarrationPrompt(reqBrief, events, lastNarration) }],
+        messages: [{ role: 'user', content: buildNarrationPrompt(events, lastNarration) }],
         max_tokens: 80,
         stream: false,
       })
