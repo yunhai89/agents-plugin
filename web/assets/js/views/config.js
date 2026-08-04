@@ -611,7 +611,8 @@
             <cfg-row class="full" name="主人列表" desc="主人 QQ 号(明文,点标签删除)">
               <div class="flex gap6 wrap" style="justify-content:flex-end">
                 <span v-for="(m, i) in form.masters" :key="i" class="chip chip-outline mono" style="cursor:pointer" @click="delMaster(i)" title="点击删除">{{ m }} <v-icon name="x"/></span>
-                <input class="input" style="width:130px;padding:4px 9px;font-size:12px" v-model="masterInput" placeholder="输入 QQ 回车添加" @keydown.enter.prevent="addMaster">
+                <input class="input" style="width:130px;padding:4px 9px;font-size:12px" v-model="masterInput" placeholder="输入 QQ 回车添加" @keydown.enter.prevent.stop="addMaster">
+                <button type="button" class="btn btn-soft btn-sm" @click="addMaster" style="padding:4px 10px;font-size:12px">添加</button>
               </div>
             </cfg-row>
             <cfg-row class="full" name="默认身份 systemPrompt" desc="留空用富默认身份;被人设覆盖时失效">
