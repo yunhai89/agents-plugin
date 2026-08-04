@@ -88,15 +88,15 @@ export function buildChatListHtml({ user = '', conversations = [], activeId = nu
 export function buildPersonaListHtml({ user = '', personas = [], activeId = null } = {}) {
   const body = personas.length
     ? personas
-        .map((p) => `<div class="persona ${p.id === activeId ? 'active' : ''}">
+        .map((p, i) => `<div class="persona ${p.id === activeId ? 'active' : ''}">
           <div class="persona-ava">${esc((p.name || '?').slice(0, 1))}</div>
           <div class="persona-body">
             <div class="persona-name">${esc(p.name)}${p.id === activeId ? '<span class="tag">当前</span>' : ''}<span class="tag">${p.builtin ? '内置' : '自定义'}</span></div>
             <div class="persona-desc">${esc(p.description || '')}</div>
           </div>
-          <div class="persona-id">#${esc(p.id)}</div>
+          <div class="persona-id">#${i + 1}</div>
         </div>`)
         .join('')
     : '<div class="empty">还没有人设</div>'
-  return buildHtml({ title: '人设列表', subtitle: user ? `用户 ${esc(user)}` : '', bodyHtml: body, footer: '#人设 + id 切换 · #新建人设 创建 · #重置人设 恢复默认', extraCss: LIST_CSS })
+  return buildHtml({ title: '人设列表', subtitle: user ? `用户 ${esc(user)}` : '', bodyHtml: body, footer: '#人设 + 序号切换（如 #人设 1）· #新建人设 创建 · #重置人设 恢复默认', extraCss: LIST_CSS })
 }
