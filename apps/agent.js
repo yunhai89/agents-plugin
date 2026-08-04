@@ -1743,17 +1743,25 @@ export class Chat extends plugin {
     const html = buildPersonaListHtml({ user: ctx.userId, personas, activeId })
     const img = await screenshot('agents-plugin/persona-list', html)
     if (img) return this.e.reply(img), true
-    const lines = personas.map((p) => `${p.id === activeId ? '★' : '·'} #${p.id} ${p.name}${p.builtin ? '（内置）' : ''} — ${p.description}`)
-    await this.e.reply(['人设列表（#人设 + id 切换）', ...lines].join('\n'))
+    const lines = personas.map((p, i) => `${p.id === activeId ? '★' : '·'} ${i + 1}. ${p.name}${p.builtin ? '（内置）' : ''} — ${p.description}`)
+    await this.e.reply(['人设列表（#人设 + 序号切换，如 #人设 1）', ...lines].join('\n'))
     return true
   }
 
   async personaSwitch() {
-    const idOrName = this.e.msg.replace(/^#人设\s+/, '').trim()
+    const input = this.e.msg.replace(/^#人设\s+/, '').trim()
     const rt = await getRuntime()
     const ctx = ctxOf(this.e)
+    // 数字 → 列表序号（1-based）；否则按 id/名称
+    let target = input
+    if (/^\d+$/.test(input)) {
+      const list = rt.personaStore.list()
+      const idx = Number(input) - 1
+      if (idx < 0 || idx >= list.length) return this.e.reply(`序号超出范围（1-${list.length}），发送 #人设 查看列表`), true
+      target = list[idx].id
+    }
     try {
-      const p = await rt.persona.setActive(ctx.userId, idOrName)
+      const p = await rt.persona.setActive(ctx.userId, target)
       await this.e.reply(`已切换人设：${p.name}${p.greeting ? `\n${p.greeting}` : ''}`)
     } catch (e) {
       await this.e.reply(e?.message || '切换失败，发送 #人设 查看列表')
@@ -1762,10 +1770,18 @@ export class Chat extends plugin {
   }
 
   async personaDetail() {
-    const idOrName = this.e.msg.replace(/^#人设详情\s+/, '').trim()
+    const input = this.e.msg.replace(/^#人设详情\s+/, '').trim()
     const rt = await getRuntime()
-    const p = rt.personaStore.get(idOrName)
-    if (!p) return this.e.reply(`未找到人设「${idOrName}」`), true
+    // 数字 → 序号
+    let target = input
+    if (/^\d+$/.test(input)) {
+      const list = rt.personaStore.list()
+      const idx = Number(input) - 1
+      if (idx < 0 || idx >= list.length) return this.e.reply(`序号超出范围（1-${list.length}）`), true
+      target = list[idx].id
+    }
+    const p = rt.personaStore.get(target)
+    if (!p) return this.e.reply(`未找到人设「${input}」`), true
     const tags = p.tags?.length ? ` | 标签：${p.tags.join('、')}` : ''
     await this.e.reply([
       `#${p.id} ${p.name}${p.builtin ? '（内置）' : '（自定义）'}${tags}`,
