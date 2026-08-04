@@ -132,6 +132,17 @@ agent:
     imageProxy: "https://i.yuki.sh"   # 图片代理：替换 i.pximg.net（QQ 无 Referer 直连 pximg 显示不了）
     apiProxy: ""             # 可选：app-api 反代地址（留空=直连 app-api.pixiv.net；国内被墙时填反代）
     maxImages: 4             # pixiv_illust 单次最多发图数
+  comfyui:
+    enable: false             # ComfyUI 工具总开关（关则不注册 comfyui__* 工具，零影响）
+    host: "http://127.0.0.1:8188"   # ComfyUI 服务地址（本地/远程/Cloud）；本地默认 8188
+    cloud: false              # true=走 Comfy Cloud 路由（host 填 https://cloud.comfy.org，端点加 /api 前缀、/history→/history_v2、/view 跟 302）
+    apiKey: ""                # Cloud 的 X-API-Key（cloud:true 时必填；本地通常留空，反向代理加鉴权时填）
+    timeout: 300              # 单次生成最长等待秒（视频模板自动放宽到 900）
+    pollInterval: 1.5         # 轮询初始间隔（秒，指数退避到 pollMaxInterval）
+    pollMaxInterval: 8        # 轮询最大间隔（秒）
+    maxImages: 4              # 单次最多发图数（防爆刷）
+    outputDir: ""             # 产物落盘目录（留空=插件 data/temp；视频/调试用）
+    allowUserModel: true      # 是否允许 model 参数覆盖默认 ck（false 则锁死模板内置模型名）
   persona:
     dir: ""
   skill:
