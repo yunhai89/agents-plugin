@@ -117,6 +117,17 @@ export const presets = {
     baseURL: 'https://opencode.ai/zen/v1',
     reasoningFields: [],
   },
+
+  /** OpenCode Go（订阅制：首月 $5，之后 $10/月，走 /zen/go/v1 端点）。
+   *  认证同 Zen（Bearer apiKey，Go 订阅后获得的 key）。
+   *  baseURL 多了 /go：https://opencode.ai/zen/go/v1。
+   *  模型同 Zen（deepseek-v4-flash / glm-5.2 / kimi-k2.7-code 等），但有使用额度限制（5h/周/月）。
+   *  额度用完后可回退 Zen 按量余额（控制台开启 Use balance）。 */
+  'opencode-go': {
+    name: 'opencode-go',
+    baseURL: 'https://opencode.ai/zen/go/v1',
+    reasoningFields: [],
+  },
 }
 
 export function getPreset(name) {
