@@ -7,7 +7,7 @@ agent:
   isolation:
     enable: true  # 多用户数据隔离（默认开）。true=每个群每个用户完全独立（会话/长期记忆/recall/群历史可见范围）；false=同群完全共享（群体型 bot，会话+记忆+群历史全群共用）。跨群始终隔离；私聊始终按用户。提醒/笔记/人设始终按用户。
   protocol: openai  # openai | anthropic | gemini（gemini=原生官方 @google/genai SDK + Interactions API，填 apiKey 即用，无需 baseURL/preset）
-  preset: deepseek  # 厂商预设（openai/deepseek/gemini/dashscope/zhipu/moonshot/mimo/openrouter）；gemini 原生协议时仅占位
+  preset: deepseek  # 厂商预设（openai/deepseek/gemini/dashscope/zhipu/moonshot/mimo/openrouter/opencode）；gemini 原生协议时仅占位
   baseURL: ""
   apiKey: ""               # ★必填：API Key（OpenAI/Anthropic 兼容或 Gemini 原生均填此）；留空则插件不初始化
   model: "deepseek-chat"

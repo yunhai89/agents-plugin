@@ -106,6 +106,17 @@ export const presets = {
       return h
     },
   },
+
+  /** OpenCode Zen（OpenAI 兼容 AI 网关：60+ 精选模型，含免费模型）。
+   *  baseURL: https://opencode.ai/zen/v1；Bearer apiKey。
+   *  模型 ID：glm-5.2 / deepseek-v4-flash / kimi-k2.7-code / claude-sonnet-4.5 / gpt-5.5 等。
+   *  端点 /chat/completions（OpenAI 兼容，覆盖 DeepSeek/GLM/Kimi/MiniMax/免费等）。
+   *  另有 /messages（Anthropic 兼容，Claude/Qwen）、/responses（GPT/Grok）——选 openai 协议走 chat/completions 即可。 */
+  opencode: {
+    name: 'opencode',
+    baseURL: 'https://opencode.ai/zen/v1',
+    reasoningFields: [],
+  },
 }
 
 export function getPreset(name) {
