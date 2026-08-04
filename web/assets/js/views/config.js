@@ -68,6 +68,22 @@
       const dirty = ref(false)
       let dirtySuppressed = true
       watch(form, () => { if (!dirtySuppressed) dirty.value = true }, { deep: true })
+      // preset → baseURL 自动联动：选厂商预设时自动填对应 baseURL（syncForm 加载时不覆盖，保留 config 已有值）
+      const PRESET_URLS = {
+        deepseek: 'https://api.deepseek.com',
+        openai: 'https://api.openai.com/v1',
+        gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        dashscope: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+        moonshot: 'https://api.moonshot.ai/v1',
+        mimo: 'https://api.xiaomimimo.com/v1',
+        anthropic: 'https://api.anthropic.com',
+        openrouter: 'https://openrouter.ai/api/v1',
+        opencode: 'https://opencode.ai/zen/v1',
+      }
+      watch(() => form.preset, (p) => {
+        if (!dirtySuppressed && p && PRESET_URLS[p]) form.baseURL = PRESET_URLS[p]
+      })
 
       /* 同步 form 与快照(不触发 dirty) */
       const syncForm = (snap) => {
