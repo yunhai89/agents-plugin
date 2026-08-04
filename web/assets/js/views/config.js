@@ -95,7 +95,10 @@
 
       const save = async () => {
         mcpServersFromUi()
-        const changes = buildChanges(origSnapshot, JSON.parse(JSON.stringify(form)))
+        const frm = JSON.parse(JSON.stringify(form))
+        console.log('[config save] masters: orig=%o form=%o', origSnapshot.masters, frm.masters)
+        const changes = buildChanges(origSnapshot, frm)
+        console.log('[config save] changes=%o', changes)
         if (!Object.keys(changes).length) { toast('无改动', 'warn'); return }
         try {
           await window.api.put('/config', { changes })
