@@ -579,7 +579,7 @@ async function buildRuntime() {
         }
       } catch (e) { Log.warn('[toolEvo] stable 注入失败', e?.message || e) }
       toolEvo = { registry: toolEvoRegistry, engine, runner, closeDb: te.closeDb, flushNow: te.flushNow }
-      Log.info(`[toolEvo] 已初始化（seeded ${seeded} 内置工具，stable ${stableCount} 经隔离 runner）`)
+      Log.info(`[toolEvo] 已初始化（内置 ${builtins.length} 个 · 本次 seed ${seeded}（已入库则跳过）· stable 进化 ${stableCount} 经隔离 runner）`)
     } catch (e) { Log.warn('[toolEvo] 初始化失败（sqlite3 未装？）', e?.message || e) }
   }
 
