@@ -83,6 +83,7 @@
     async loadOverview() {
       const d = await api.get('/overview')
       MOCK.tokenTrend = d.tokenTrend; MOCK.toolTop = d.toolTop; MOCK.perceptions = d.perceptions
+      if (d.counts) MOCK.counts = d.counts
     },
   }
 })()

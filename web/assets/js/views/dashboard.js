@@ -21,8 +21,8 @@
             sub: `上限 ${cfg.recall?.cap || '—'} 条/用户 · 抽取每 ${cfg.recall?.extractEvery || '—'} 轮`, count: true,
           },
           {
-            icon: 'session', grad: 'var(--grad-sky)', label: '活跃对话', value: (M.conversations || []).length,
-            sub: '滑动窗口保留 20 条', count: true,
+            icon: 'session', grad: 'var(--grad-sky)', label: '活跃对话', value: M.counts?.conversations ?? 0,
+            sub: '群聊/私聊会话总数', count: true,
           },
           {
             icon: 'confirm', grad: 'var(--grad-amber)', label: '待审批 / 待审建议', value: (M.confirms || []).length + (M.suggestions || []).filter((s) => s.status === 'pending').length,

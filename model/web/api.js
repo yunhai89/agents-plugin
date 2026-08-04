@@ -262,10 +262,20 @@ router.get('/overview', asyncHandler(async (req, res) => {
       }
     } catch { /* noop */ }
   }
+  // 活跃对话数：group:user 会话（Yz:agent:sess:<gid>:<uid>）+ conversation 数据键（排除 active/seq 辅助键）
+  let conversations = 0
+  try {
+    if (r?.kv) {
+      const keys = (await r.kv.scan('Yz:agent:sess:')) || []
+      const isAux = (k) => k.includes(':conv:active:') || k.includes(':conv:seq:')
+      conversations = keys.filter((k) => !isAux(k)).length
+    }
+  } catch { /* noop */ }
   const counts = {
     pendingConfirms: r ? r.confirm.list().length : 0,
     pendingSuggestions: r ? listAllSuggestions(r.suggestionDir, { status: 'pending' }).length : 0,
     scopes: fs.existsSync(Config.path.memories) ? fs.readdirSync(Config.path.memories).length : 0,
+    conversations,
   }
   const data = { tokenTrend, toolTop, perceptions, counts }
   _overviewCache = { at: Date.now(), data }
