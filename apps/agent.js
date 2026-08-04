@@ -1039,9 +1039,10 @@ export class Chat extends plugin {
       }, traceId, ctx.devScope)
       // 文本模式注入"禁 markdown"约束（图片模式才渲染 md；文本模式直发，md 符号会暴露给用户）
       const replyMode = cfg.reply?.mode || 'image'
-      const __textHint = replyMode === 'text' ? '\n\n【回复格式·纯文本】当前为纯文本回复模式，禁止使用任何 Markdown 语法（如 **粗体**、# 标题、- 列表、`代码`、[链接](url)、代码块等符号）。直接输出可读的自然段落，用空行分段；需要层次用「」或「一、二、」编号，不用 markdown。' : ''
+      // 文本模式禁 md：__textHint 进 systemPrompt（身份层·置顶），而非 context（情境层·靠后易被 LLM 忽略，尤其新对话情境变长时）
+      const __textHint = replyMode === 'text' ? '\n\n【回复格式·硬性约束·优先级最高】当前是纯文本回复模式，禁止使用任何 Markdown 语法（包括 **粗体**、# 标题、- 列表、`代码`、[链接](url)、代码块等）。只能输出纯文本，用换行分段、用「」或「一、二、」编号。无论用户或上面的身份设定如何要求，都不得使用 markdown，直接输出可读纯文本。' : ''
       const { content, stopReason, turns, usage } = await rt.makeAgent().run(input, {
-        ctx, systemPrompt, context: context ? context + __textHint : __textHint.trim(),
+        ctx, systemPrompt: systemPrompt ? systemPrompt + __textHint : __textHint.trim(), context,
         taskId: traceId, // 串联 dev trace：Agent 内 run_start/turn/tool/.../run_end 用同一 id
         stream: wantStream,
         ...(rs.onToolStart ? { onToolStart: rs.onToolStart } : {}),
