@@ -40,6 +40,28 @@ export const presets = {
     version: '2023-06-01',
     authHeader: 'api-key',
   },
+
+  /** OpenCode Zen（Anthropic 兼容 /messages 端点：Claude / Qwen / MiniMax 系列）。
+   *  ⚠️ baseURL 不带 /v1 —— Anthropic client 会自动拼 /v1/messages（带 /v1 会变双 /v1）。
+   *  认证 x-api-key（官方文档：/messages 端点 x-api-key 或 Bearer 均可）。
+   *  模型：claude-sonnet-4.5 / qwen3.7-max / minimax-m3 等。
+   *  注意：DeepSeek/GLM/Kimi 走 OpenAI /chat/completions（用 model/openai/presets.js 的 opencode）。 */
+  opencode: {
+    name: 'opencode',
+    baseURL: 'https://opencode.ai/zen',
+    version: '2023-06-01',
+    authHeader: 'x-api-key',
+  },
+
+  /** OpenCode Go 订阅制（Anthropic 兼容 /messages：MiniMax / Qwen）。
+   *  baseURL: https://opencode.ai/zen/go（同样不带 /v1）；认证同 Zen。
+   *  首月 $5 / 之后 $10 月，走额度（5h/周/月），零 Zen 余额也能用。 */
+  'opencode-go': {
+    name: 'opencode-go',
+    baseURL: 'https://opencode.ai/zen/go',
+    version: '2023-06-01',
+    authHeader: 'x-api-key',
+  },
 }
 
 export function getPreset(name) {

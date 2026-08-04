@@ -79,11 +79,16 @@
         mimo: 'https://api.xiaomimimo.com/v1',
         anthropic: 'https://api.anthropic.com',
         openrouter: 'https://openrouter.ai/api/v1',
-        opencode: 'https://opencode.ai/zen/v1',
-        'opencode-go': 'https://opencode.ai/zen/go/v1',
+        // OpenCode 两套端点：openai 走 /chat/completions（baseURL 带 /v1）；anthropic 走 /messages（client 自动拼 /v1，baseURL 不能带）
+        opencode: { openai: 'https://opencode.ai/zen/v1', anthropic: 'https://opencode.ai/zen' },
+        'opencode-go': { openai: 'https://opencode.ai/zen/go/v1', anthropic: 'https://opencode.ai/zen/go' },
       }
-      watch(() => form.preset, (p) => {
-        if (!dirtySuppressed && p && PRESET_URLS[p]) form.baseURL = PRESET_URLS[p]
+      // preset 或 protocol 变化都重新联动 baseURL（OpenCode 在两种协议下 baseURL 不同）
+      watch(() => [form.preset, form.protocol], ([p]) => {
+        if (!dirtySuppressed && p && PRESET_URLS[p]) {
+          const u = PRESET_URLS[p]
+          form.baseURL = typeof u === 'string' ? u : (u[form.protocol] || u.openai)
+        }
       })
 
       /* 同步 form 与快照(不触发 dirty) */
