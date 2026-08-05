@@ -910,7 +910,7 @@ export class Chat extends plugin {
     const protocol = cfg.protocol || 'openai'
     const caps = detectCapabilities({ protocol, model: cfg.model, caps: cfg.media?.caps })
     const mediaCfg = cfg.media || {}
-    ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2 }
+    ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2, maxImages: cfg.miyoushe?.maxImages ?? 9 }
     // terminal 工具运行时配置（黑名单/超时/工作目录 + 沙盒 image/network/mounts）
     ctx.terminal = {
       cwd: Config.path.yunzai,

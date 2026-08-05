@@ -11,6 +11,7 @@
  */
 
 import { searchPosts, getPostDetail, getPostReplies, getGameGid } from './client.js'
+import Log from '../../utils/Log.js'
 
 function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleString('zh-CN') : ''
@@ -37,7 +38,7 @@ export function formatSearchResults(data) {
   return text
 }
 
-export function formatPostDetail(post) {
+export function formatPostDetail(post, opts = {}) {
   const badges = [post.flags.isTop ? '置顶' : '', post.flags.isGood ? '精华' : '', post.flags.isOfficial ? '官方' : '', post.flags.isOriginal ? '原创' : ''].filter(Boolean)
   let text = `## ${post.title}${badges.length ? ` [${badges.join(' ')}]` : ''}\n\n`
   text += `**作者**: ${post.author.nickname} (UID:${post.author.uid}, Lv.${post.author.level})\n`
@@ -47,10 +48,17 @@ export function formatPostDetail(post) {
   text += `\n---\n\n`
   const plain = post.plainText
   text += plain.length > 3000 ? plain.slice(0, 3000) + '\n\n[...内容过长，已截断]' : plain
-  if (post.images.length) {
-    text += `\n\n**📸 图片列表** (共${post.images.length}张)：\n\n`
-    for (const url of post.images.slice(0, 10)) text += `![](${url})\n\n`
-    if (post.images.length > 10) text += `...还有${post.images.length - 10}张图片\n`
+  const imgs = post.images || []
+  if (imgs.length) {
+    if (opts.sentImages > 0) {
+      // 图已主动发到聊天，不再重复 markdown URL（避免 AI 又把 URL 贴一遍）
+      const rest = imgs.length - opts.sentImages
+      text += `\n\n**📸 图片**（共 ${imgs.length} 张，已发送 ${opts.sentImages} 张到聊天${rest > 0 ? `；其余 ${rest} 张未发（超上限或失败）` : ''}）\n`
+    } else {
+      text += `\n\n**📸 图片列表** (共${imgs.length}张)：\n\n`
+      for (const url of imgs.slice(0, 10)) text += `![](${url})\n\n`
+      if (imgs.length > 10) text += `...还有${imgs.length - 10}张图片\n`
+    }
   }
   text += `\n链接: ${post.link}`
   return text
@@ -94,7 +102,7 @@ export const miyousheSearchTool = {
 
 export const miyoushePostTool = {
   name: 'miyoushe_post',
-  description: '按帖子ID获取米游社帖子详情（正文/图片/互动数据）。先用 miyoushe_search 拿到 postId，再用本工具读全文。',
+  description: '按帖子ID获取米游社帖子详情（正文/图片/互动数据），并【自动把帖子里所有图片发送到聊天】（攻略多为图集，避免只发一张）。先用 miyoushe_search 拿到 postId，再用本工具读全文。',
   category: 'query',
   meta: { resultCap: 12000 },
   parameters: {
@@ -102,6 +110,7 @@ export const miyoushePostTool = {
     properties: {
       postId: { type: 'string', description: '米游社帖子ID' },
       game: { type: 'string', description: '游戏名或 gid（默认原神）' },
+      sendImages: { type: 'boolean', description: '是否把帖子所有图片发到聊天（默认 true；图集攻略帖建议开）' },
     },
     required: ['postId'],
   },
@@ -109,7 +118,21 @@ export const miyoushePostTool = {
     const m = ctx?.miyoushe || {}
     const gid = params.game ? getGameGid(params.game) : m.defaultGid || 2
     const post = await getPostDetail(params.postId, { gid, ...opt(ctx) })
-    return formatPostDetail(post)
+
+    // 主动把帖子所有图片发到聊天（攻略帖常为图集；仿 pixiv_illust 的 ctx.e.reply 模式，
+    // 避免 AI 拿到图片 URL 后只挑一张发）
+    const imgs = post.images || []
+    const wantImages = params.sendImages !== false
+    const maxImages = Math.min(50, Math.max(1, Number(m.maxImages) || 9))
+    let sent = 0
+    if (wantImages && imgs.length && ctx?.e?.reply && typeof segment !== 'undefined') {
+      for (const url of imgs.slice(0, maxImages)) {
+        try { await ctx.e.reply(segment.image(url)); sent++ }
+        catch (e) { Log.warn('[miyoushe] 发图失败', e?.message || e, url) }
+      }
+      Log.info(`[miyoushe] 帖子 ${params.postId} 发图 ${sent}/${imgs.length} 张`)
+    }
+    return formatPostDetail(post, { sentImages: sent })
   },
 }
 

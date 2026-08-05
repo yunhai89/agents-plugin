@@ -126,6 +126,7 @@ agent:
   miyoushe:
     cookie: ""
     defaultGid: 2
+    maxImages: 9              # miyoushe_post 单帖最多主动发图数（攻略图集帖，避免只发一张；默认 9）
   pixiv:
     enable: false            # Pixiv 功能总开关（需 refreshToken）
     refreshToken: ""         # Pixiv refresh token（用 gppt / pxrepo 等获取；填后 #agents重载）
