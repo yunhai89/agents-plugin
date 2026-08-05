@@ -64,7 +64,7 @@
     async loadRecall(userId) { MOCK.recall[userId] = await api.get('/recall', { userId }) },
     async loadPersonas() { MOCK.personas = await api.get('/personas') },
     async loadSkills() { MOCK.skills = await api.get('/skills') },
-    async loadConversations(userId, groupId) { MOCK.conversations = await api.get('/conversations', { userId, groupId }) },
+    async loadConversations(userId, groupId) { MOCK.conversations = userId ? await api.get('/conversations', { userId, groupId }) : await api.get('/conversations') },
     async loadSession(convId, userId, groupId) { MOCK.sessions[convId] = await api.get('/sessions', { convId, userId, groupId }) },
     async loadLogFiles(query) {
       const d = await api.get('/logs/files', query)

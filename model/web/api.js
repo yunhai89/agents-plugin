@@ -103,11 +103,14 @@ router.get('/skills', asyncHandler(async (req, res) => {
   return ok(res, r.skills.list())
 }))
 
-// GET /api/conversations?userId=&groupId= —— 对话列表（裸数组）
+// GET /api/conversations?userId=&groupId= —— 对话列表（裸数组）。无 userId 时返回全局所有 scope 的对话（每条带 scopeUserId/scopeGroupId，与概览"活跃对话"同源）
 router.get('/conversations', asyncHandler(async (req, res) => {
-  const userId = String(req.query.userId || '')
-  if (!userId) return fail(res, CODE.BAD, '缺少 userId')
   const r = await getRt(res); if (!r) return
+  const userId = String(req.query.userId || '')
+  if (!userId) {
+    const all = await r.session.listAllConversations().catch(() => [])
+    return ok(res, all)
+  }
   const groupId = req.query.groupId || 'private'
   const list = await r.session.listConversations(userId, groupId).catch(() => [])
   return ok(res, list)

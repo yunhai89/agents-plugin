@@ -24,19 +24,17 @@
 
       const parseArgs = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2) } catch { return s } }
 
-      /* 切对话 → 拉该会话消息 */
+      /* 切对话 → 用该对话自带的 scope 拉会话消息（全局列表下每个对话归属不同 scope） */
       watch(activeId, (id) => {
         if (!id) return
-        window.store.loadSession(id, userId.value, groupId.value || 'private').catch(() => {})
+        const c = M.conversations.find((x) => x.id === id)
+        if (c) window.store.loadSession(id, c.scopeUserId, c.scopeGroupId || 'private').catch(() => {})
       })
 
-      /* 惰性加载:scope 定默认用户/群 → 拉对话列表 → 默认选第一条(触发上面 watch 拉 session) */
+      /* 全局加载所有对话（与概览"活跃对话"同源，避免依赖 memories 目录选 scope 导致回放列表为空）→ 默认选最新一条 */
       onMounted(async () => {
         try {
-          await window.store.loadScopes()
-          const s = M.scopes[0]
-          if (s) { userId.value = s.userId; groupId.value = s.groupId || '' }
-          await window.store.loadConversations(userId.value, groupId.value || 'private')
+          await window.store.loadConversations()
           if (M.conversations[0]) activeId.value = M.conversations[0].id
         } catch { /* 忽略,运行时未就绪时列表为空 */ }
       })

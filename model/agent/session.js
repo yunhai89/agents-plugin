@@ -132,6 +132,33 @@ export class SessionStore {
     return out.sort((a, b) => Number(a.id) - Number(b.id))
   }
 
+  /** 列出全局所有 scope 的全部对话（每条带 scopeUserId/scopeGroupId，供 web 会话回放全局视图；与概览"活跃对话"同源，避免依赖 memories 目录选 scope 导致两边数据不一致） */
+  async listAllConversations() {
+    const keys = (await this.kv.scan(`${this.prefix}conv:`))
+      .filter((k) => !k.includes(':active:') && !k.includes(':seq:'))
+    const out = []
+    for (const k of keys) {
+      const c = await this.kv.get(k).catch(() => null)
+      if (!c) continue
+      // 键形态：...conv:<gid>:<uid>:<convId>（gid='private' 或数字；末两段为 uid/convId）
+      const parts = k.slice(`${this.prefix}conv:`.length).split(':')
+      const convId = parts[parts.length - 1]
+      const userId = parts[parts.length - 2] || ''
+      const groupId = parts.slice(0, -2).join(':') || 'private'
+      out.push({
+        id: c.id,
+        title: c.title || `对话 ${c.id}`,
+        count: (c.messages || []).length,
+        updatedAt: c.updatedAt || c.createdAt || 0,
+        createdAt: c.createdAt || 0,
+        preview: preview(c.messages || []),
+        scopeUserId: userId,
+        scopeGroupId: groupId === 'private' ? '' : groupId,
+      })
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   /** 取活跃对话 id；若无则自动创建首个 */
   async getActiveConversation(userId, groupId) {
     const v = await this.kv.get(this.activeKey(userId, groupId))
