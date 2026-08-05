@@ -15,6 +15,7 @@ import {
   SessionStore,
   RecallStore,
   ScheduleStore,
+  reminderSetTool,
   ConfirmStore,
   nodeScheduleAdapter,
   memoryKv,
@@ -446,6 +447,7 @@ async function buildRuntime() {
       .register(...aiVoiceTools) // AI 语音：角色列表/文字转语音/群内发送
       .register(...forwardTools) // 合并转发：发送/获取
       .register(...miyousheTools)
+      .register(reminderSetTool) // reminder_set：对话设提醒（到时间 fireReminder 主动发消息）
   }
 
   // Pixiv（需 refreshToken；未配置则不注册，避免暴露不可用工具）
@@ -912,6 +914,13 @@ export class Chat extends plugin {
     const mediaCfg = cfg.media || {}
     ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2, maxImages: cfg.miyoushe?.maxImages ?? 9 }
     ctx.replyMode = cfg.reply?.mode || 'image' // 供工具按回复模式分流发图（image 渲染进回复图 / text 合并转发）
+    // 提醒服务：reminder_set 工具经此调 rt.schedule.add（绑定 fireReminder + selfId），到时间 fireReminder 主动发消息
+    ctx.selfId = String(this.e.self_id || this.e.selfId || '')
+    ctx.reminder = {
+      add: (info) => rt.schedule.add({ selfId: ctx.selfId, ...info }, fireReminder),
+      list: (userId) => rt.schedule.listByUser(userId),
+      cancel: (id) => rt.schedule.cancel(id),
+    }
     // terminal 工具运行时配置（黑名单/超时/工作目录 + 沙盒 image/network/mounts）
     ctx.terminal = {
       cwd: Config.path.yunzai,
@@ -1103,9 +1112,22 @@ export class Chat extends plugin {
         })
           if (img) {
             await this.e.reply(atSender ? [atSender, img] : img); delivered = true
-            // 图片模式下链接单独发文本（图内无法复制）：提取正文裸链接、去尾标点、去重后补发
+            // 图片模式下链接单独发（图内无法复制）：单链接文本直发；多链接打包一条合并转发防刷屏
             const __links = [...new Set((body.match(/https?:\/\/[^\s<>"')]+/g) || []).map((s) => s.replace(/[.,;:!?)]+$/, '')))]
-            if (__links.length) { try { await this.e.reply(__links.join('\n')) } catch { /* noop */ } }
+            if (__links.length === 1) {
+              try { await this.e.reply(__links[0]) } catch { /* noop */ }
+            } else if (__links.length > 1) {
+              try {
+                const __nodes = __links.map((u) => ({ uin: String(this.e.self_id || this.e.selfId || ''), name: '链接', content: u }))
+                const __action = this.e.isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+                const __fp = this.e.isGroup ? { group_id: this.e.group_id, messages: __nodes } : { user_id: this.e.user_id, messages: __nodes }
+                const __r = this.e.bot?.sendApi ? await this.e.bot.sendApi(__action, __fp) : null
+                if (!__r || (__r.status !== 'ok' && __r.retcode !== 0)) throw new Error('forward unavailable')
+              } catch {
+                // 适配器不支持合并转发 → 降级一条文本
+                try { await this.e.reply(__links.join('\n')) } catch { /* noop */ }
+              }
+            }
           }
         } catch (e) { Log.warn('[render] 回复图片渲染失败，回退文本', e?.message || e) }
       }

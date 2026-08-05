@@ -76,3 +76,40 @@ export async function nodeScheduleAdapter() {
     cancelJob(job) { job?.cancel?.() },
   }
 }
+
+/**
+ * reminder_set 工具：让 AI 通过对话为当前用户设一次性提醒。
+ * execute 调 ctx.reminder.add（由 apps 注入：绑定 rt.schedule + fireReminder + selfId）。
+ * 时间由 LLM 推算成 ISO 8601（带时区），避免本库引入自然语言时间解析依赖。
+ */
+export const reminderSetTool = {
+  name: 'reminder_set',
+  description: '为当前用户设置一次性定时提醒（到时间会主动发消息提醒）。用户说"N点/明天X点/几分钟后提醒我XX"时用。at 必须是未来时间、ISO 8601 带时区偏移（如 2026-08-06T15:00:00+08:00），由你根据用户措辞 + 当前时间（见【自我状态】）推算。',
+  category: 'personal',
+  parameters: {
+    type: 'object',
+    properties: {
+      at: { type: 'string', description: '触发时间，ISO 8601 带时区（如 2026-08-06T15:00:00+08:00）；必须是未来时间' },
+      message: { type: 'string', description: '提醒内容（到时间会原样发给用户）' },
+    },
+    required: ['at', 'message'],
+  },
+  async execute(p, ctx) {
+    const at = new Date(p.at)
+    if (isNaN(at.getTime())) return { error: `无法解析时间「${p.at}」，请用 ISO 8601 带时区（如 2026-08-06T15:00:00+08:00）` }
+    if (at.getTime() <= Date.now()) return { error: `时间「${p.at}」已过，提醒须是未来时间` }
+    if (!ctx?.reminder?.add) return { error: '提醒服务未就绪' }
+    try {
+      const rec = await ctx.reminder.add({
+        userId: ctx.scopeUserId,
+        groupId: ctx.groupId || null,
+        selfId: ctx.selfId || '',
+        at: at.getTime(),
+        message: p.message,
+      })
+      return { ok: true, id: rec.id, at: at.toLocaleString('zh-CN'), message: p.message, note: '已设提醒，到时间会主动发消息给用户' }
+    } catch (e) {
+      return { error: `设置提醒失败：${e?.message || e}` }
+    }
+  },
+}
