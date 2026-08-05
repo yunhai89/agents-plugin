@@ -52,14 +52,11 @@ export function formatPostDetail(post, opts = {}) {
   const imgs = post.images || []
   if (imgs.length) {
     if (opts.sentImages > 0) {
-      // 图已发到聊天（text 模式=合并转发 / image 模式=主动发），不再重复 markdown URL
+      // 图已合并转发到聊天，不在正文重复 markdown URL（避免回复图重复渲染）
       const rest = imgs.length - opts.sentImages
-      text += `\n\n**📸 图片**（共 ${imgs.length} 张，已${opts.replyMode === 'text' ? '合并转发' : '发送'} ${opts.sentImages} 张到聊天${rest > 0 ? `；其余 ${rest} 张未发` : ''}）\n`
-    } else if (opts.replyMode === 'text') {
-      // 文本模式且未发图（无 ctx/segment/转发失败）：不展示 raw URL（文本模式渲染不了 markdown）
-      text += `\n\n**📸 图片**（共 ${imgs.length} 张；文本模式下未展示，可查看原帖 ${post.link}）\n`
+      text += `\n\n**📸 图片**（共 ${imgs.length} 张，已合并转发 ${opts.sentImages} 张到聊天${rest > 0 ? `；其余 ${rest} 张未发（超上限或失败）` : ''}）\n`
     } else {
-      // image 模式：markdown URL（renderReplyImage 会下载内联渲染进回复图）
+      // 未发图（无 ctx/segment/转发失败）：保留 markdown URL 作降级（image 模式可渲染，text 模式纯文本显示）
       text += `\n\n**📸 图片列表** (共${imgs.length}张)：\n\n`
       for (const url of imgs.slice(0, 10)) text += `![](${url})\n\n`
       if (imgs.length > 10) text += `...还有${imgs.length - 10}张图片\n`
@@ -107,7 +104,7 @@ export const miyousheSearchTool = {
 
 export const miyoushePostTool = {
   name: 'miyoushe_post',
-  description: '按帖子ID获取米游社帖子详情（正文/图片/互动数据），并【自动把帖子里所有图片发送到聊天】（攻略多为图集，避免只发一张）。先用 miyoushe_search 拿到 postId，再用本工具读全文。',
+  description: '按帖子ID获取米游社帖子详情（正文/图片/互动数据），并【自动把帖子里所有图片合并转发到聊天】（图集打包成一条合并转发发出，避免逐张刷屏；图片不进正文，你只需转述攻略文字，不要在回复里贴图片 URL）。先用 miyoushe_search 拿到 postId，再用本工具读全文。',
   category: 'query',
   meta: { resultCap: 12000 },
   parameters: {
@@ -124,19 +121,17 @@ export const miyoushePostTool = {
     const gid = params.game ? getGameGid(params.game) : m.defaultGid || 2
     const post = await getPostDetail(params.postId, { gid, ...opt(ctx) })
 
-    // 发图按回复模式分流（ctx.replyMode 由 apps/agent.js 注入）：
-    //  - image 模式：不主动发图，markdown URL 留在返回文本里 → LLM 回复 → renderReplyImage
-    //    下载内联，渲染进一张回复图（不刷屏，所有图都在回复图里）
-    //  - text 模式：markdown URL 会显示成 raw 文本（丑），改把所有图打包成一条合并转发
-    //    （send_*_forward_msg），防逐张刷屏
+    // 发图：两种回复模式统一合并转发（send_*_forward_msg）。
+    // image 模式原计划"靠 LLM 回复保留 ![](url) → renderReplyImage 渲染进回复图"，但实测
+    // 多数模型（如 mimo）会在总结时丢掉图 URL，导致回复图渲染不出图、用户收不到。
+    // 故统一主动合并转发：保证图一定发出 + 一条消息不刷屏 + 返回文本不含 URL（避免回复图重复）。
     const imgs = post.images || []
     const wantImages = params.sendImages !== false
     const maxImages = Math.min(50, Math.max(1, Number(m.maxImages) || 9))
-    const replyMode = ctx?.replyMode || 'image'
     let sent = 0
 
-    if (wantImages && imgs.length && replyMode === 'text' && ctx?.e?.reply && typeof segment !== 'undefined') {
-      // 文本模式：所有图打包成一条合并转发；每图一节点，sender 用帖子作者
+    if (wantImages && imgs.length && ctx?.e?.reply && typeof segment !== 'undefined') {
+      // 所有图打包成一条合并转发；每图一节点，sender 用帖子作者
       const nodes = imgs.slice(0, maxImages).map((url) => ({
         uin: String(post.author.uid || ctx.userId || '80000000'),
         name: String(post.author.nickname || '米游社').slice(0, 20),
@@ -150,8 +145,7 @@ export const miyoushePostTool = {
       if (r.ok) { sent = nodes.length; Log.info(`[miyoushe] 帖子 ${params.postId} 合并转发 ${sent} 张图`) }
       else Log.warn('[miyoushe] 合并转发失败', r.error)
     }
-    // image 模式：sent 保持 0，formatPostDetail 走 markdown 分支（渲染进回复图）
-    return formatPostDetail(post, { sentImages: sent, replyMode })
+    return formatPostDetail(post, { sentImages: sent })
   },
 }
 
