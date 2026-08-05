@@ -12,6 +12,7 @@
 
 import { searchPosts, getPostDetail, getPostReplies, getGameGid } from './client.js'
 import Log from '../../utils/Log.js'
+import { sendApi } from '../toolkit/index.js'
 
 function fmtDate(ts) {
   return ts ? new Date(ts * 1000).toLocaleString('zh-CN') : ''
@@ -51,10 +52,14 @@ export function formatPostDetail(post, opts = {}) {
   const imgs = post.images || []
   if (imgs.length) {
     if (opts.sentImages > 0) {
-      // 图已主动发到聊天，不再重复 markdown URL（避免 AI 又把 URL 贴一遍）
+      // 图已发到聊天（text 模式=合并转发 / image 模式=主动发），不再重复 markdown URL
       const rest = imgs.length - opts.sentImages
-      text += `\n\n**📸 图片**（共 ${imgs.length} 张，已发送 ${opts.sentImages} 张到聊天${rest > 0 ? `；其余 ${rest} 张未发（超上限或失败）` : ''}）\n`
+      text += `\n\n**📸 图片**（共 ${imgs.length} 张，已${opts.replyMode === 'text' ? '合并转发' : '发送'} ${opts.sentImages} 张到聊天${rest > 0 ? `；其余 ${rest} 张未发` : ''}）\n`
+    } else if (opts.replyMode === 'text') {
+      // 文本模式且未发图（无 ctx/segment/转发失败）：不展示 raw URL（文本模式渲染不了 markdown）
+      text += `\n\n**📸 图片**（共 ${imgs.length} 张；文本模式下未展示，可查看原帖 ${post.link}）\n`
     } else {
+      // image 模式：markdown URL（renderReplyImage 会下载内联渲染进回复图）
       text += `\n\n**📸 图片列表** (共${imgs.length}张)：\n\n`
       for (const url of imgs.slice(0, 10)) text += `![](${url})\n\n`
       if (imgs.length > 10) text += `...还有${imgs.length - 10}张图片\n`
@@ -119,20 +124,34 @@ export const miyoushePostTool = {
     const gid = params.game ? getGameGid(params.game) : m.defaultGid || 2
     const post = await getPostDetail(params.postId, { gid, ...opt(ctx) })
 
-    // 主动把帖子所有图片发到聊天（攻略帖常为图集；仿 pixiv_illust 的 ctx.e.reply 模式，
-    // 避免 AI 拿到图片 URL 后只挑一张发）
+    // 发图按回复模式分流（ctx.replyMode 由 apps/agent.js 注入）：
+    //  - image 模式：不主动发图，markdown URL 留在返回文本里 → LLM 回复 → renderReplyImage
+    //    下载内联，渲染进一张回复图（不刷屏，所有图都在回复图里）
+    //  - text 模式：markdown URL 会显示成 raw 文本（丑），改把所有图打包成一条合并转发
+    //    （send_*_forward_msg），防逐张刷屏
     const imgs = post.images || []
     const wantImages = params.sendImages !== false
     const maxImages = Math.min(50, Math.max(1, Number(m.maxImages) || 9))
+    const replyMode = ctx?.replyMode || 'image'
     let sent = 0
-    if (wantImages && imgs.length && ctx?.e?.reply && typeof segment !== 'undefined') {
-      for (const url of imgs.slice(0, maxImages)) {
-        try { await ctx.e.reply(segment.image(url)); sent++ }
-        catch (e) { Log.warn('[miyoushe] 发图失败', e?.message || e, url) }
-      }
-      Log.info(`[miyoushe] 帖子 ${params.postId} 发图 ${sent}/${imgs.length} 张`)
+
+    if (wantImages && imgs.length && replyMode === 'text' && ctx?.e?.reply && typeof segment !== 'undefined') {
+      // 文本模式：所有图打包成一条合并转发；每图一节点，sender 用帖子作者
+      const nodes = imgs.slice(0, maxImages).map((url) => ({
+        uin: String(post.author.uid || ctx.userId || '80000000'),
+        name: String(post.author.nickname || '米游社').slice(0, 20),
+        content: [segment.image(url)],
+      }))
+      const action = ctx.isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
+      const fwdParams = ctx.isGroup
+        ? { group_id: ctx.groupId, messages: nodes }
+        : { user_id: ctx.userId, messages: nodes }
+      const r = await sendApi(ctx, action, fwdParams)
+      if (r.ok) { sent = nodes.length; Log.info(`[miyoushe] 帖子 ${params.postId} 合并转发 ${sent} 张图`) }
+      else Log.warn('[miyoushe] 合并转发失败', r.error)
     }
-    return formatPostDetail(post, { sentImages: sent })
+    // image 模式：sent 保持 0，formatPostDetail 走 markdown 分支（渲染进回复图）
+    return formatPostDetail(post, { sentImages: sent, replyMode })
   },
 }
 

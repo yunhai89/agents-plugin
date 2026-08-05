@@ -911,6 +911,7 @@ export class Chat extends plugin {
     const caps = detectCapabilities({ protocol, model: cfg.model, caps: cfg.media?.caps })
     const mediaCfg = cfg.media || {}
     ctx.miyoushe = { cookie: cfg.miyoushe?.cookie || '', defaultGid: cfg.miyoushe?.defaultGid || 2, maxImages: cfg.miyoushe?.maxImages ?? 9 }
+    ctx.replyMode = cfg.reply?.mode || 'image' // 供工具按回复模式分流发图（image 渲染进回复图 / text 合并转发）
     // terminal 工具运行时配置（黑名单/超时/工作目录 + 沙盒 image/network/mounts）
     ctx.terminal = {
       cwd: Config.path.yunzai,
