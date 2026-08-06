@@ -7,10 +7,26 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { runShell } from '../terminal/index.js'
+import { exec } from 'node:child_process'
 import Config from '../../utils/Config.js'
 
 function shellQuote(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function _trunc(s, max = 8000) {
+  const t = String(s == null ? '' : '')
+  return t.length <= max ? t : t.slice(0, max) + `\n…[已截断，共 ${t.length} 字符]`
+}
+
+/** 主机执行 shell（ffmpeg 提取音频：操作主机文件，不走 terminal Docker 沙盒——容器无 ffmpeg 且看不到主机路径）。 */
+function runShell(command, { cwd, timeout = 60, maxOutput = 8000 } = {}) {
+  return new Promise((resolve) => {
+    try {
+      exec(command, { cwd: cwd || undefined, timeout: (Number(timeout) || 60) * 1000, maxBuffer: (maxOutput || 8000) * 1024 }, (err, stdout, stderr) => {
+        resolve({ ok: !err, exitCode: err ? (Number.isFinite(err.code) ? err.code : 1) : 0, stdout: _trunc(stdout, maxOutput), stderr: _trunc(stderr, maxOutput), signal: err?.signal || null, timedOut: err?.killed && err?.signal === 'SIGTERM' })
+      })
+    } catch (e) { resolve({ ok: false, exitCode: null, stdout: '', stderr: `exec 失败：${e?.message || e}`, signal: null }) }
+  })
+}
 
 const VIDEO_EXTS = new Set(['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.m4v', '.wmv'])
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.m4a', '.ogg', '.flac', '.aac', '.wma', '.opus'])

@@ -16,8 +16,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Config from '../../utils/Config.js'
-import { runShell } from '../terminal/index.js'
-import { spawn } from 'node:child_process'
+import { spawn, exec } from 'node:child_process'
 import {
   paths, ensureDirs, scanRepo, buildIndex, loadIndex, saveIndex, imageAbsOf, dirSize, buildCatalog,
 } from './index.js'
@@ -27,6 +26,27 @@ const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
 const IMG_EXT = new Set(Object.keys(MIME))
 
 function shellQuote(s) { return `"${String(s).replace(/"/g, '\\"')}"` }
+
+function _trunc(s, max = 8000) {
+  const t = String(s == null ? '' : '')
+  return t.length <= max ? t : t.slice(0, max) + `\n…[已截断，共 ${t.length} 字符]`
+}
+
+/**
+ * 主机执行 shell（表情包 git 操作专用）。操作主机仓库目录 paths.REPO_DIR，**不走 terminal Docker 沙盒**——
+ * 沙盒容器无 git 且看不到主机目录，会误报"无 git"。返回 {ok,exitCode,stdout,stderr}（与 _spawnGit 同构）。
+ */
+function runShell(command, { cwd, timeout = 60, maxOutput = 8000 } = {}) {
+  return new Promise((resolve) => {
+    try {
+      exec(command, { cwd: cwd || undefined, timeout: (Number(timeout) || 60) * 1000, maxBuffer: (maxOutput || 8000) * 1024 }, (err, stdout, stderr) => {
+        resolve({ ok: !err, exitCode: err ? (Number.isFinite(err.code) ? err.code : 1) : 0, stdout: _trunc(stdout, maxOutput), stderr: _trunc(stderr, maxOutput) })
+      })
+    } catch (e) {
+      resolve({ ok: false, exitCode: null, stdout: '', stderr: `exec 失败：${e?.message || e}` })
+    }
+  })
+}
 
 /**
  * 内置 GitHub 加速代理（克隆表情包仓库用）。前缀式直接拼在原 URL 前；gitclone 为域名替换镜像。
