@@ -10,7 +10,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Config from '../../utils/Config.js'
 import { setPath } from '../../utils/path.js'
-import { getRuntime, fireReminder } from '../../apps/agent.js'
+import { getRuntime, fireReminder, makeFireDispatch } from '../../apps/agent.js'
+import { parseCron } from '../agent/schedule.js'
 import { redactConfig } from './redact.js'
 import { listLogFiles, readLogFile, aggregateStats, queryLogFiles } from './logs.js'
 import { ok, fail, asyncHandler, CODE } from './response.js'
@@ -101,6 +102,13 @@ router.get('/personas', asyncHandler(async (req, res) => {
 router.get('/skills', asyncHandler(async (req, res) => {
   const r = await getRt(res); if (!r) return
   return ok(res, r.skills.list())
+}))
+
+// GET /api/tools —— 已注册工具列表（内置 + tools/ 自定义 + MCP，供配置中心"常驻工具"勾选）
+router.get('/tools', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const list = typeof r.tools?.list === 'function' ? r.tools.list() : []
+  return ok(res, list.map((t) => ({ id: t.name, name: t.name, description: t.description || '', category: t.category || 'query' })))
 }))
 
 // GET /api/conversations?userId=&groupId= —— 对话列表（裸数组）。无 userId 时返回全局所有 scope 的对话（每条带 scopeUserId/scopeGroupId，与概览"活跃对话"同源）
@@ -362,6 +370,72 @@ router.delete('/recall/:userId/:entryId', asyncHandler(async (req, res) => {
   return ok(res, { removed })
 }))
 
+// ── 知识库（Knowledge Base）──
+// GET /api/kb —— 文档列表
+router.get('/kb', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  return ok(res, await r.knowledge.listDocs().catch(() => []))
+}))
+
+// POST /api/kb —— 文档入库 { title, text }
+router.post('/kb', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const { title, text } = req.body || {}
+  if (!text) return fail(res, CODE.BAD, '缺少 text')
+  const result = await r.knowledge.ingest(String(text), { title: title || '' })
+  if (result.error) return fail(res, CODE.BAD, result.error)
+  return ok(res, result)
+}))
+
+// DELETE /api/kb/:id —— 删除文档
+router.delete('/kb/:id', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const n = await r.knowledge.removeDoc(req.params.id)
+  return ok(res, { removed: n })
+}))
+
+// POST /api/kb/rebuild —— 重建向量索引（换 embedding 模型后）
+router.post('/kb/rebuild', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const result = await r.knowledge.rebuild()
+  if (result.error) return fail(res, CODE.BAD, result.error)
+  return ok(res, result)
+}))
+
+// POST /api/kb/url —— 网页 URL 抓取入库 { url, title?, refreshCron? }
+router.post('/kb/url', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const { url, title, refreshCron } = req.body || {}
+  if (!url) return fail(res, CODE.BAD, '缺少 url')
+  const result = await r.knowledge.ingestUrl(String(url), { title: title || '', refreshCron: refreshCron || null })
+  if (result.error) return fail(res, CODE.BAD, result.error)
+  return ok(res, result)
+}))
+
+// POST /api/kb/:id/refresh —— 刷新某网页文档（重新抓取更新 chunks）
+router.post('/kb/:id/refresh', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const result = await r.knowledge.refreshDoc(req.params.id)
+  if (result.error) return fail(res, CODE.BAD, result.error)
+  return ok(res, result)
+}))
+
+// POST /api/kb/:id/schedule —— 设定时刷新 { cron }（cron=null 或省略=取消）
+router.post('/kb/:id/schedule', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const { cron } = req.body || {}
+  const result = await r.knowledge.setRefresh(req.params.id, cron ? String(cron) : null)
+  if (result.error) return fail(res, CODE.BAD, result.error)
+  return ok(res, result)
+}))
+
+// DELETE /api/kb/:id/schedule —— 取消定时刷新
+router.delete('/kb/:id/schedule', asyncHandler(async (req, res) => {
+  const r = await getRt(res); if (!r) return
+  const result = await r.knowledge.cancelRefresh(req.params.id)
+  return ok(res, result)
+}))
+
 // POST /api/personas —— 新建自定义人设
 router.post('/personas', asyncHandler(async (req, res) => {
   const r = await getRt(res); if (!r) return
@@ -383,13 +457,26 @@ router.delete('/personas/:id', asyncHandler(async (req, res) => {
   catch (e) { const msg = e.message || ''; return fail(res, /内置/.test(msg) ? CODE.READONLY : CODE.BAD, msg) }
 }))
 
-// POST /api/schedule —— 新建定时任务（注入 fireReminder 回调）
+// POST /api/schedule —— 新建任务（type='task'=cron 重复任务链；默认=一次性提醒）
 router.post('/schedule', asyncHandler(async (req, res) => {
   const r = await getRt(res); if (!r) return
-  const { userId, groupId, message, at } = req.body || {}
-  if (!userId || !message || !at) return fail(res, CODE.BAD, '缺少 userId/message/at')
-  const info = { userId: String(userId), groupId: groupId || null, selfId: '', at: Number(at), message: String(message) }
-  const ret = await r.schedule.add(info, fireReminder)
+  const { userId, groupId, message, at, type, cron, when, prompt } = req.body || {}
+  if (!userId) return fail(res, CODE.BAD, '缺少 userId')
+  const isTask = type === 'task'
+  let cronVal = ''
+  if (isTask) {
+    cronVal = String(cron || '')
+    if (!cronVal && when) cronVal = parseCron(when) || ''
+    if (!cronVal || !prompt) return fail(res, CODE.BAD, 'task 需时间(when/cron) + prompt')
+  } else if (!message || !at) {
+    return fail(res, CODE.BAD, '缺少 message/at')
+  }
+  const info = {
+    userId: String(userId), groupId: groupId || null, selfId: '',
+    type: isTask ? 'task' : 'reminder',
+    ...(isTask ? { cron: cronVal, prompt: String(prompt) } : { message: String(message), at: Number(at) }),
+  }
+  const ret = await r.schedule.add(info, isTask ? makeFireDispatch(r) : fireReminder)
   const id = ret && typeof ret === 'object' ? ret.id : ret
   return ok(res, { id })
 }))

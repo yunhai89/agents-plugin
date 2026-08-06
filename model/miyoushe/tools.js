@@ -131,19 +131,16 @@ export const miyoushePostTool = {
     let sent = 0
 
     if (wantImages && imgs.length && ctx?.e?.reply && typeof segment !== 'undefined') {
-      // 所有图打包成一条合并转发；每图一节点，sender 用帖子作者
-      const nodes = imgs.slice(0, maxImages).map((url) => ({
-        uin: String(post.author.uid || ctx.userId || '80000000'),
-        name: String(post.author.nickname || '米游社').slice(0, 20),
-        content: [segment.image(url)],
-      }))
-      const action = ctx.isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-      const fwdParams = ctx.isGroup
-        ? { group_id: ctx.groupId, messages: nodes }
-        : { user_id: ctx.userId, messages: nodes }
-      const r = await sendApi(ctx, action, fwdParams)
-      if (r.ok) { sent = nodes.length; Log.info(`[miyoushe] 帖子 ${params.postId} 合并转发 ${sent} 张图`) }
-      else Log.warn('[miyoushe] 合并转发失败', r.error)
+      // 所有图打包成一条合并转发（Yunzai makeForwardMsg：e.group/friend/Bot.makeForwardMsg([{message}]) → forward segment → reply）
+      try {
+        const fwdMsg = imgs.slice(0, maxImages).map((url) => ({ message: segment.image(url) }))
+        let fwd = null
+        if (ctx.isGroup && ctx.e?.group?.makeForwardMsg) fwd = await ctx.e.group.makeForwardMsg(fwdMsg)
+        else if (ctx.e?.friend?.makeForwardMsg) fwd = await ctx.e.friend.makeForwardMsg(fwdMsg)
+        else if (ctx.e?.bot?.makeForwardMsg) fwd = await ctx.e.bot.makeForwardMsg(fwdMsg)
+        if (fwd) { await ctx.e.reply(fwd); sent = fwdMsg.length; Log.info(`[miyoushe] 帖子 ${params.postId} 合并转发 ${sent} 张图`) }
+        else Log.warn('[miyoushe] 合并转发不可用（适配器无 makeForwardMsg）')
+      } catch (e) { Log.warn('[miyoushe] 合并转发失败', e?.message || e) }
     }
     return formatPostDetail(post, { sentImages: sent })
   },

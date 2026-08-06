@@ -30,6 +30,25 @@ const SECTIONS = [
     ],
   },
   {
+    title: '知识库',
+    commands: [
+      { cmd: '#知识库添加 +文本/URL', desc: '主人：文档/网页入库（URL 自动抓取正文）' },
+      { cmd: '#知识库列表', desc: '查看知识库文档（🌐=网页URL）' },
+      { cmd: '#知识库刷新 +id', desc: '主人：刷新某网页文档（拉取最新内容）' },
+      { cmd: '#知识库定时 +id +时间', desc: '主人：定时刷新网页文档（每天8点/每2小时…）' },
+      { cmd: '#知识库删除 +id', desc: '主人：删除文档' },
+      { cmd: '#知识库重建', desc: '主人：重建向量索引（换 embedding 模型后）' },
+    ],
+  },
+  {
+    title: '定时任务',
+    commands: [
+      { cmd: '#定时任务 +时间 +任务', desc: '主人：cron 重复任务链（到点跑任务+发结果）。时间：每天8点/每2小时/工作日9点/每周一8点30' },
+      { cmd: '#定时任务列表', desc: '查看所有定时任务' },
+      { cmd: '#取消定时任务 +id', desc: '主人：取消定时任务' },
+    ],
+  },
+  {
     title: '人设',
     commands: [
       { cmd: '#人设', desc: '查看人设列表（图片）' },
@@ -79,6 +98,7 @@ const SECTIONS = [
   {
     title: '在线自进化（主人）',
     commands: [
+      { cmd: '#LLM进化', desc: '手动触发一次自进化评审（不等 N 轮自动，产出 suggestion）' },
       { cmd: '#审阅进化', desc: '查看后台自评审产出的待审 suggestion（prompt/技能类）' },
       { cmd: '#采纳 +id', desc: '采纳一条 suggestion（prompt 类下轮生效）' },
       { cmd: '#拒绝进化 +id', desc: '拒绝并删除一条 suggestion' },

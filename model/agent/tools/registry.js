@@ -12,6 +12,7 @@
  */
 
 import { cosine } from '../recall.js'
+import { BM25 } from '../../llm/local-sim.js'
 
 function brief(v, n = 160) {
   let s
@@ -191,18 +192,30 @@ export class ToolRegistry {
     if (this._embedFn) {
       try { qEmbed = await this._embedFn(q) } catch { qEmbed = null } // embed 失败 → 降级关键词覆盖率
     }
+    // 无 embedding（embedFn 未配/qEmbed 失败）→ BM25 纯代码检索（IDF 加权，比 coverage 抗长 query 稀释）
+    if (!qEmbed) {
+      const bm = new BM25()
+      const docs = []
+      for (const doc of this._index) {
+        if (category && doc.category !== category) continue
+        bm.add([...doc.tokens])
+        docs.push(doc)
+      }
+      const scores = bm.scoresNormalized([...qTokens])
+      return docs
+        .map((doc, i) => ({ name: doc.name, score: scores[i] || 0, category: doc.category, summary: doc.summary, required: doc.required }))
+        .filter((s) => s.score >= minScore)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, topK)
+    }
+    // 有 embedding：cosine（doc.embedding 懒计算）
     const scored = []
     for (const doc of this._index) {
       if (category && doc.category !== category) continue
-      let sim
-      if (qEmbed) {
-        if (!doc.embedding) {
-          try { doc.embedding = await this._embedFn([doc.name, doc.summary].join(' ')) } catch { doc.embedding = null }
-        }
-        sim = (qEmbed && doc.embedding) ? cosine(qEmbed, doc.embedding) : coverage(qTokens, doc.tokens)
-      } else {
-        sim = coverage(qTokens, doc.tokens)
+      if (!doc.embedding) {
+        try { doc.embedding = await this._embedFn([doc.name, doc.summary].join(' ')) } catch { doc.embedding = null }
       }
+      const sim = (qEmbed && doc.embedding) ? cosine(qEmbed, doc.embedding) : 0
       if (sim >= minScore) scored.push({ name: doc.name, score: sim, category: doc.category, summary: doc.summary, required: doc.required })
     }
     return scored.sort((a, b) => b.score - a.score).slice(0, topK)
@@ -231,12 +244,15 @@ function toolTokenize(s) {
   return grams
 }
 
-/** query 覆盖率：query tokens 中命中文档的比例（|∩|/|query|），不受文档长度影响 */
+/** query 覆盖率：max(query 覆盖率, doc 覆盖率)。短查询靠 query 覆盖率；长查询（含多意图词）
+ *  不被稀释——改用 doc 覆盖率（命中文档的比例）兜底，避免"定时任务资讯推送"这类长 query 漏召回。 */
 function coverage(qTokens, docTokens) {
   if (!qTokens?.size) return 0
   let n = 0
   for (const t of qTokens) if (docTokens?.has(t)) n++
-  return n / qTokens.size
+  const qCov = n / qTokens.size
+  const dCov = docTokens?.size ? n / docTokens.size : 0
+  return Math.max(qCov, dCov)
 }
 
 /** 从 name/description 派生发现用关键词（内联以避免与 skill 模块耦合；逻辑同 skill/index.js） */

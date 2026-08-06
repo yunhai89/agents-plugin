@@ -160,11 +160,21 @@
           if (el && el.getBoundingClientRect().top > 60 && el.getBoundingClientRect().top < 240) { activeSec.value = s.id; break }
         }
       }
+      /* 常驻工具勾选：从已注册工具列表（/tools）按类别选，避免用户手输工具名 */
+      const allTools = computed(() => M.tools || [])
+      const toolCats = computed(() => [...new Set(allTools.value.map((t) => t.category))].sort())
+      const toolsByCat = (cat) => allTools.value.filter((t) => t.category === cat)
+      const toggleAlwaysOn = (id) => {
+        const a = Array.isArray(form.toolDiscovery?.alwaysOn) ? form.toolDiscovery.alwaysOn : []
+        form.toolDiscovery.alwaysOn = a.includes(id) ? a.filter((x) => x !== id) : [...a, id]
+      }
+
       onMounted(async () => {
         window.addEventListener('scroll', onScroll, { passive: true })
         try {
           await window.store.loadConfig()
           if (M.config) syncForm(JSON.parse(JSON.stringify(M.config)))
+          window.store.loadTools().catch(() => {}) // 工具列表（失败不阻塞配置加载）
         } catch (e) { toast(e.message, 'error') }
       })
       onUnmounted(() => window.removeEventListener('scroll', onScroll))
@@ -323,6 +333,7 @@
         mcpServersToUi, delMcp, mcpModal, openNewMcp, confirmNewMcp,
         thinkingOn, tempPct,
         orModels, orSearch, orLoading, loadOrModels, orFiltered, pickOrModel, orKey, loadOrKey,
+        allTools, toolCats, toolsByCat, toggleAlwaysOn,
       }
     },
     template: `
@@ -539,8 +550,14 @@
             <cfg-row name="抽取用模型" desc="留空=utilityModel→主模型">
               <input class="input" style="width:170px" v-model="form.recall.model" placeholder="留空=主模型">
             </cfg-row>
-            <cfg-row name="语义召回 embedding" desc="留空=关键词 jaccard 召回">
-              <input class="input" style="width:170px" v-model="form.recall.embedProvider" placeholder="留空=关键词召回">
+            <cfg-row name="embedding 模型" desc="留空=关键词 jaccard 召回；填模型 id 走语义召回">
+              <input class="input mono" style="width:200px" v-model="form.recall.embedProvider" placeholder="如 text-embedding-3-small / embedding-3">
+            </cfg-row>
+            <cfg-row name="embedding 接口 / Key" desc="留空=复用主 baseURL/apiKey；用专门 embedding 服务时填">
+              <div class="flex gap6">
+                <input class="input mono" style="width:200px" v-model="form.recall.embedBaseURL" placeholder="baseURL 留空=复用主">
+                <input class="input mono" style="width:140px" v-model="form.recall.embedApiKey" placeholder="Key 留空=复用主">
+              </div>
             </cfg-row>
           </div></div>
         </div>
@@ -657,10 +674,16 @@
             <cfg-row name="单次最多图片" desc="media.maxImages">
               <input type="number" class="input" style="width:110px" min="1" max="20" v-model.number="form.media.maxImages">
             </cfg-row>
-            <cfg-row name="视觉子模型" desc="主模型无视觉时图转文">
+            <cfg-row name="视觉子模型" desc="主模型无视觉时图转文；各字段留空=复用主配置">
               <v-switch v-model="form.vision.enable"/>
             </cfg-row>
-            <cfg-row name="视觉模型 Key" desc="空则复用主 apiKey">
+            <cfg-row name="视觉模型 ID" desc="视觉模型名(如 qwen-vl-max/gpt-4o/glm-4v)；留空=复用主模型">
+              <input class="input mono" style="width:240px" v-model="form.vision.model" placeholder="留空=复用主模型">
+            </cfg-row>
+            <cfg-row name="视觉接口地址" desc="baseURL；留空=复用主(跨厂商时填，如 https://dashscope.aliyuncs.com/compatible-mode/v1)">
+              <input class="input mono" style="width:240px" v-model="form.vision.baseURL" placeholder="留空=复用主 baseURL">
+            </cfg-row>
+            <cfg-row name="视觉模型 Key" desc="apiKey；空则复用主 Key">
               <input class="input mono" style="width:240px" v-model="form.vision.apiKey" placeholder="留空=复用主 Key">
             </cfg-row>
             <cfg-row name="工具按需发现" desc="常驻少数工具,其余 tool_search 动态注入">
@@ -672,8 +695,19 @@
                 <input type="number" class="input" style="width:90px" min="0" max="1" step="0.05" v-model.number="form.toolDiscovery.minScore">
               </div>
             </cfg-row>
-            <cfg-row class="full" name="常驻工具" desc="不经搜索始终可用">
-              <tag-editor v-model="form.toolDiscovery.alwaysOn"/>
+            <cfg-row class="full" name="常驻工具" desc="不经搜索始终可用；从已注册工具勾选（留空=用内置默认 6 个）">
+              <div v-if="!allTools.length" class="muted-3" style="font-size:12px">工具列表加载中或运行时未就绪…</div>
+              <div v-else style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px 12px;background:var(--surface-2)">
+                <div v-for="cat in toolCats" :key="cat" style="margin-bottom:8px">
+                  <div class="muted" style="font-size:11px;margin:3px 0 4px;text-transform:uppercase;letter-spacing:.5px">{{ cat }}</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:4px">
+                    <label v-for="t in toolsByCat(cat)" :key="t.id" :title="t.description" class="chip" :class="{'chip-primary': (form.toolDiscovery.alwaysOn||[]).includes(t.id)}" style="cursor:pointer;user-select:none;font-size:12px">
+                      <input type="checkbox" :checked="(form.toolDiscovery.alwaysOn||[]).includes(t.id)" @change="toggleAlwaysOn(t.id)" style="display:none">
+                      {{ t.name }}
+                    </label>
+                  </div>
+                </div>
+              </div>
             </cfg-row>
 
             <cfg-row name="Tavily 搜索 Key" desc="任填一个搜索源即启用">

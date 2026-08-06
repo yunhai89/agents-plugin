@@ -158,13 +158,26 @@ export class SelfReviewer {
       .filter((s) => s && ALLOWED_KIND.has(s.kind))
       .filter((s) => !this.autoApplyMemory || (s.confidence || 0) >= 0.5) // 低置信直接丢，不值得记
       .slice(0, 3)
-    if (!filtered.length) { this.logger('debug', '[selfReview] 本轮无有效 suggestion'); return }
+    if (!filtered.length) { this.logger('debug', '[selfReview] 本轮无有效 suggestion'); return 0 }
 
     for (const s of filtered) {
       try { await this._apply(ctx, s) }
       catch (e) { this.logger('warn', '[selfReview] suggestion 应用异常', s?.kind, e?.message || e) }
     }
     this.logger('mark', `[selfReview] scope=${scopeId} 产出 ${filtered.length} 条 suggestion（memory 自动=${this.autoApplyMemory}）`)
+    return filtered.length
+  }
+
+  /** 手动触发评审（#LLM进化 命令用；跳过节流立即跑一次，返回产出数） */
+  async force(ctx, runResult = {}) {
+    if (!this.enable) return { error: '自进化未启用（config agent.selfReview.enable）' }
+    try {
+      const n = await this._review(ctx, runResult)
+      return { suggestionCount: Number.isFinite(n) ? n : 0 }
+    } catch (e) {
+      this.logger('warn', '[selfReview] 手动评审异常', e?.message || e)
+      return { error: `评审失败：${e?.message || e}` }
+    }
   }
 
   /** 分级应用：memory 类自动写（置信度闸）；skill/prompt 类落盘待审 */

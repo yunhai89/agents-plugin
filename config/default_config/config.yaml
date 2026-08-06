@@ -59,6 +59,20 @@ agent:
     extractEvery: 10        # 每 N 轮触发一次 LLM 抽取（意图词"记住/叫我"等仍即时触发）
     model: ""               # 抽取用模型 id（留空=utilityModel→主模型）
     embedProvider: ""       # 语义召回 embedding 模型 id（留空=关键词 jaccard；填则走 cosine 语义匹配）
+    embedBaseURL: ""        # embedding 接口地址（留空=复用主 baseURL；用专门 embedding 服务时填，如 https://api.openai.com/v1）
+    embedApiKey: ""         # embedding apiKey（留空=复用主 apiKey）
+  kb:
+    enable: true            # 知识库总开关（关则不注册 kb_search、不入库）
+    crawlEnable: true       # 网页抓取开关（web_crawl 工具 + URL 入库/刷新；关则不注册 web_crawl）
+    crawlTimeout: 60        # 单页抓取超时秒（HTTP 抓取，慢站可调大）
+    chunkSize: 500          # 文档分块字符数
+    chunkOverlap: 50        # 分块重叠（保上下文连贯）
+    topK: 5                 # kb_search 默认返回片段数
+    minScore: 0.3           # 最低相似度（cosine；低于不返回）；embedding 复用上面的 recall.embedProvider
+  schedule:
+    taskEnabled: true       # 定时任务链总开关（#定时任务 cron 重复 task；false 则拒绝创建）
+    taskTimeout: 180        # 任务链最长执行秒（到点 Agent.run 工具循环预算）
+    taskMaxTurns: 15        # 任务链工具调用轮次上限（防失控烧 token）
   selfReview:
     enable: true            # 在线自进化：每 N 轮对话后台异步自我评审，产出改进 suggestion（不阻塞回复）
     every: 20               # 每 N 轮对话触发一次后台自评审（per-scope 计数）

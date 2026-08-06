@@ -24,12 +24,15 @@ function fmtTime(ts) {
 
 // 列表/结构行补充样式（复用主题调色板：白卡 + 蓝强调 + 浅灰分隔）
 const LIST_CSS = `
-.help-section { margin: 16px 0 4px; }
-.help-section-title { font-size: 1.04em; font-weight: 680; color: ${ACCENT}; margin-bottom: 4px; }
-.cmd { display:flex; align-items:baseline; gap:12px; padding:7px 0; border-bottom:1px dashed #f0f1f4; }
-.cmd:last-child { border-bottom:0; }
-.cmd-key { flex:0 0 auto; font-family: "SFMono-Regular", Consolas, Menlo, monospace; font-size:.88em; color:#be185d; background:#f4f4f5; padding:1px 8px; border-radius:6px; white-space:nowrap; }
-.cmd-desc { color:#4b5563; font-size:.94em; }
+.help-section { background:#f8f9fb; border:1px solid #eef0f3; border-radius:14px; padding:14px 16px 16px; margin:0 0 14px; }
+.help-section-title { display:flex; align-items:center; font-size:15px; font-weight:700; color:#111827; margin-bottom:12px; padding-left:10px; position:relative; }
+.help-section-title::before { content:''; position:absolute; left:0; top:3px; bottom:3px; width:4px; background:linear-gradient(180deg,${ACCENT},#60a5fa); border-radius:2px; }
+.help-section-title .help-ico { font-size:16px; margin-right:6px; }
+.help-section-title .help-cnt { margin-left:auto; font-size:11px; font-weight:600; color:#9aa3b2; background:#fff; padding:1px 9px; border-radius:20px; border:1px solid #eef0f3; }
+.help-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.cmd-cell { background:#fff; border:1px solid #eef0f3; border-radius:10px; padding:10px 11px; }
+.cmd-cell .cmd-key { display:inline-block; font-family:"SFMono-Regular","JetBrains Mono",Consolas,monospace; font-size:12px; font-weight:600; color:#2563eb; background:#eff6ff; padding:2px 8px; border-radius:6px; word-break:break-all; line-height:1.5; margin-bottom:6px; }
+.cmd-cell .cmd-desc { display:block; font-size:12px; color:#6b7280; line-height:1.55; }
 .conv { display:flex; align-items:center; padding:12px 0; border-bottom:1px solid #f3f4f6; }
 .conv:last-child { border-bottom:0; }
 .conv.active { background:#f5f8ff; border-radius:12px; padding:12px 12px; border-bottom:0; margin:4px 0; }
@@ -53,11 +56,15 @@ const LIST_CSS = `
 /**
  * 帮助图：sections = [{ title, commands:[{cmd, desc}] }]
  */
+const SECTION_ICON = { '触发对话':'💬', '对话管理':'🗂️', '记忆 / 提醒':'⏰', '知识库':'📚', '定时任务':'🗓️', '人设':'🎭', '深度研究':'🔍', '表情包':'😀', '主人指令':'👑', '在线自进化（主人）':'🧬' }
+
 export function buildHelpHtml({ title = 'agents-plugin 帮助', subtitle = '', sections = [] } = {}) {
   const body = sections
     .map((s) => `<div class="help-section">
-        <div class="help-section-title">${esc(s.title)}</div>
-        ${s.commands.map((c) => `<div class="cmd"><span class="cmd-key">${esc(c.cmd)}</span><span class="cmd-desc">${esc(c.desc)}</span></div>`).join('')}
+        <div class="help-section-title">${SECTION_ICON[s.title] ? `<span class="help-ico">${SECTION_ICON[s.title]}</span>` : ''}${esc(s.title)}<span class="help-cnt">${s.commands.length}</span></div>
+        <div class="help-grid">
+          ${s.commands.map((c) => `<div class="cmd-cell"><span class="cmd-key">${esc(c.cmd)}</span><span class="cmd-desc">${esc(c.desc)}</span></div>`).join('')}
+        </div>
       </div>`)
     .join('')
   return buildHtml({ title, subtitle, bodyHtml: body, footer: 'agents-plugin · AI Agent 驱动 · 主人指令以 # 标注', extraCss: LIST_CSS })

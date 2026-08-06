@@ -16,6 +16,8 @@ import {
   RecallStore,
   ScheduleStore,
   reminderSetTool,
+  parseCron,
+  scheduleTaskTool,
   ConfirmStore,
   nodeScheduleAdapter,
   memoryKv,
@@ -34,6 +36,8 @@ import { McpManager } from '../model/mcp/index.js'
 import { createMediaService, makeMediaTools } from '../model/media/index.js'
 import { detectCapabilities } from '../model/llm/capabilities.js'
 import { embed } from '../model/llm/embed.js'
+import { KnowledgeStore, makeKbSearchTool } from '../model/agent/knowledge.js'
+import { webCrawlTool } from '../model/crawl/index.js' // web_crawl：抓取网页正文（常驻）
 import { groupInfoTools, groupManageTools, groupHistoryTools, groupNoticeTools, groupFileTools, aiVoiceTools, forwardTools } from '../model/group/index.js'
 import { miyousheTools } from '../model/miyoushe/index.js'
 import { pixivTools } from '../model/pixiv/index.js'
@@ -354,9 +358,16 @@ async function buildRuntime() {
     ...(proxyFetch ? { fetch: proxyFetch } : {}),
   })
 
-  // 可选 embedding 函数：填了 recall.embedProvider 才造（OpenAI 兼容端点），供工具检索 + recall 语义召回共用
-  const embedFn = cfg.recall?.embedProvider
-    ? (text) => embed(text, { client: provider, model: cfg.recall.embedProvider })
+  // 可选 embedding 函数：填了 recall.embedProvider 才造（OpenAI 兼容 /embeddings 端点），供工具检索 + recall 语义召回共用。
+  // 配了 embedBaseURL/embedApiKey 则用独立 embedding provider（专门 embedding 服务），否则复用主 provider
+  const _rcfg = cfg.recall || {}
+  const embedFn = _rcfg.embedProvider
+    ? (text) => embed(text, {
+        client: (_rcfg.embedBaseURL || _rcfg.embedApiKey)
+          ? { baseURL: _rcfg.embedBaseURL || provider.client?.baseURL, apiKey: _rcfg.embedApiKey || provider.client?.apiKey }
+          : provider,
+        model: _rcfg.embedProvider,
+      })
     : null
 
   // 回退 provider：每条独立 baseURL/apiKey/protocol（可跨厂商，如主 DeepSeek + 回退 GPT）
@@ -405,10 +416,17 @@ async function buildRuntime() {
     // embedding（可选）：填了 recall.embedProvider 即走 cosine 语义召回，否则纯关键词 jaccard
     embedFn,
   })
+  // 知识库（全局共享文档库）：复用 recall 的 embedFn，chunk+向量化存 KV，kb_search 检索（RAG）
+  const knowledge = new KnowledgeStore({
+    kv: K, embedFn,
+    chunkSize: cfg.kb?.chunkSize, chunkOverlap: cfg.kb?.chunkOverlap,
+    topK: cfg.kb?.topK, minScore: cfg.kb?.minScore,
+  })
   // confirmTimeout 配置单位是「秒」，ConfirmStore 用「毫秒」，这里换算（默认 300 秒）
   const confirm = new ConfirmStore({ timeout: (cfg.confirmTimeout || 300) * 1000 })
   const scheduler = await nodeScheduleAdapter()
   const schedule = new ScheduleStore({ kv: K, scheduler })
+  knowledge.attachScheduler(scheduler) // KB URL 定时刷新复用同一 scheduler（注册/恢复 refresh job）
   const persona = new PersonaService({ store: personaStore, kv: K })
 
   // Skill（说明书 / 指令包）：从 skills/ 目录加载 .md/.js，按用户输入匹配后注入 prompt
@@ -435,6 +453,10 @@ async function buildRuntime() {
     .register(createMemoryTool(memory))
     .register(makeRecallTool(recall)) // memory_search：模型主动检索长期记忆
     .register(...makeMediaTools())
+  // kb_search：知识库检索（默认开；cfg.kb.enable:false 关闭）
+  if (cfg.kb?.enable !== false) tools.register(makeKbSearchTool(knowledge))
+  // web_crawl：抓取网页正文（常驻；cfg.kb.crawlEnable:false 关闭）
+  if (cfg.kb?.crawlEnable !== false) tools.register(webCrawlTool)
 
   // 内置基础工具包：群信息 / 群管 / 米游社
   if (cfg.tools?.builtin !== false) {
@@ -448,6 +470,7 @@ async function buildRuntime() {
       .register(...forwardTools) // 合并转发：发送/获取
       .register(...miyousheTools)
       .register(reminderSetTool) // reminder_set：对话设提醒（到时间 fireReminder 主动发消息）
+      .register(scheduleTaskTool) // schedule_task：对话设 cron 重复任务链（到点跑 Agent + 发结果）
   }
 
   // Pixiv（需 refreshToken；未配置则不注册，避免暴露不可用工具）
@@ -659,10 +682,10 @@ async function buildRuntime() {
     }
   }
 
-  return { agentConfig, makeAgent, tools, session, recall, memory, confirm, schedule, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K, promptRegistry, traceStore, selfReview, promptDir, suggestionDir, toolEvo }
+  return { agentConfig, makeAgent, tools, session, recall, knowledge, memory, confirm, schedule, scheduler, mcp, provider, persona, personaStore, vision, skills, skillsDir, sticker: getStickerManager(), kv: K, promptRegistry, traceStore, selfReview, promptDir, suggestionDir, toolEvo }
 }
 
-async function getRuntime() {
+const getRuntime = async () => {
   if (_runtime) return _runtime
   // 失败缓存：apiKey 等配置类错误一旦发生，直接抛缓存原因，不再每条消息重新 buildRuntime
   // （否则每条群消息都重建+抛错+回复，刷屏 + 日志爆炸）。配置热加载后 invalidateRuntime 清缓存重试。
@@ -762,7 +785,7 @@ function notifyMaster(e, id, info) {
   }
 }
 
-export async function fireReminder(info) {
+export const fireReminder = async (info) => {
   try {
     const bot = (typeof Bot !== 'undefined' && (Bot[info.selfId] || Bot)) || null
     const text = `⏰ 提醒：${info.message}`
@@ -770,6 +793,53 @@ export async function fireReminder(info) {
     else if (bot?.pickFriend) await bot.pickFriend(info.userId).sendMsg(text)
   } catch (err) {
     Log.warn('fireReminder 失败', err?.message || err)
+  }
+}
+
+// 按目标（群/私聊）发消息（fire 路径，无 e；复用 fireReminder 的 pickGroup/pickFriend 逻辑）
+async function sendByInfo(info, text) {
+  const bot = (typeof Bot !== 'undefined' && (Bot[info.selfId] || Bot)) || null
+  if (!bot) return
+  if (info.groupId && bot.pickGroup) await bot.pickGroup(info.groupId).sendMsg(text)
+  else if (bot.pickFriend) await bot.pickFriend(info.userId).sendMsg(text)
+}
+
+// 合成 ctx（fire 时无用户事件 e）：复用 ctxOf 的 scope 逻辑，去 e 相关
+function ctxFromInfo(info) {
+  const userId = String(info.userId || '')
+  const groupId = info.groupId ? String(info.groupId) : null
+  const isGroup = !!groupId
+  const cfg = Config.get().agent || {}
+  const isolation = cfg.isolation?.enable !== false
+  const sharedGroup = !!(isGroup && groupId && !isolation)
+  const scopeUserId = sharedGroup ? '__group__' : userId
+  const scopeId = !isGroup ? `u_${userId}` : (isolation ? `g${groupId}_u${userId}` : `g${groupId}`)
+  return {
+    userId, groupId, isGroup, isMaster: false, isolation, scopeUserId, scopeId,
+    bot: (typeof Bot !== 'undefined' && Bot) || null, selfId: info.selfId || '',
+    notify: () => {}, fetcher: (typeof fetch !== 'undefined' && fetch) || null,
+    conversationId: null,
+  }
+}
+
+// 统一 fire 分发：type='task' → 跑 Agent 任务链（makeAgent().run(prompt)）+ 发结果；否则 fireReminder 静态
+export const makeFireDispatch = (rt) => {
+  return async (info) => {
+    if (info.type === 'task' && info.prompt) {
+      try {
+        const cfg = Config.get().agent?.schedule || {}
+        const ctx = ctxFromInfo(info)
+        const r = await rt.makeAgent().run(info.prompt, { ctx, maxTurns: cfg.taskMaxTurns || 15 })
+        const text = `🤖 定时任务：${(r?.content || '').trim() || '(无输出)'}`
+        await sendByInfo(info, text)
+        Log.info('[schedule] 任务链完成', info.id, 'turns=', r?.turns)
+      } catch (e) {
+        Log.warn('[schedule] 任务链失败', info.id, e?.message || e)
+        try { await sendByInfo(info, `⚠️ 定时任务「${String(info.prompt).slice(0, 30)}」执行失败：${e?.message || e}`) } catch { /* noop */ }
+      }
+    } else {
+      await fireReminder(info)
+    }
   }
 }
 
@@ -802,6 +872,18 @@ export class Chat extends plugin {
         { reg: '^#回滚工具\\s+(\\S+)\\s+(\\S+)', fnc: 'toolEvoRollback', permission: 'master' },
         { reg: '^#工具健康$', fnc: 'toolEvoHealth', permission: 'master' },
         { reg: '^#openrouter余额$', fnc: 'openrouterBalance', permission: 'master' },
+        { reg: '^#知识库添加[\\s\\S]*', fnc: 'addKnowledge', permission: 'master' },
+        { reg: '^#知识库列表$', fnc: 'listKnowledge' },
+        { reg: '^#知识库删除\\s+(\\S+)', fnc: 'delKnowledge', permission: 'master' },
+        { reg: '^#知识库重建$', fnc: 'rebuildKnowledge', permission: 'master' },
+        { reg: '^#知识库刷新全部$', fnc: 'refreshAllKnowledge', permission: 'master' },
+        { reg: '^#知识库刷新\\s+(\\S+)', fnc: 'refreshKnowledge', permission: 'master' },
+        { reg: '^#知识库定时\\s+(\\S+)\\s+([\\s\\S]+)', fnc: 'setKbRefresh', permission: 'master' },
+        { reg: '^#知识库取消定时\\s+(\\S+)', fnc: 'cancelKbRefresh', permission: 'master' },
+        { reg: '^#定时任务\\s+[\\s\\S]+', fnc: 'addCronTask', permission: 'master' },
+        { reg: '^#定时任务列表$', fnc: 'listCronTask' },
+        { reg: '^#取消定时任务\\s+(\\S+)', fnc: 'cancelCronTask', permission: 'master' },
+        { reg: '^#LLM进化$', fnc: 'llmEvolve', permission: 'master' },
         // —— 所有用户 ——
         { reg: '^#聊天列表$', fnc: 'chatList' },
         { reg: '^#进入聊天\\s*(\\d+)', fnc: 'enterChat' },
@@ -832,7 +914,11 @@ export class Chat extends plugin {
       ],
     })
     getRuntime()
-      .then((rt) => rt.schedule.restore(fireReminder).catch(() => {}))
+      .then((rt) => {
+        rt.schedule.restore(makeFireDispatch(rt)).catch(() => {})
+        // KB URL 定时刷新 job 恢复（重启后 cron 继续生效）
+        rt.knowledge.restoreRefreshJobs((id) => rt.knowledge.refreshDoc(id).catch((e) => Log.warn('[kb] 定时刷新失败', id, e?.message || e))).catch(() => {})
+      })
       .catch((e) => { if (!_initErrLogged) { _initErrLogged = true; Log.error('agent 初始化失败（修复 config 后重启，或保存 config 触发热加载自动恢复）', e?.message || e) } })
   }
 
@@ -917,9 +1003,24 @@ export class Chat extends plugin {
     // 提醒服务：reminder_set 工具经此调 rt.schedule.add（绑定 fireReminder + selfId），到时间 fireReminder 主动发消息
     ctx.selfId = String(this.e.self_id || this.e.selfId || '')
     ctx.reminder = {
-      add: (info) => rt.schedule.add({ selfId: ctx.selfId, ...info }, fireReminder),
+      // 有 prompt → 一次性任务链（type=task 跑 Agent + 发结果，走 fireDispatch）；否则静态提醒（fireReminder）
+      add: (info) => {
+        const isTask = !!info.prompt
+        return rt.schedule.add(
+          { selfId: ctx.selfId, type: isTask ? 'task' : 'reminder', ...info },
+          isTask ? makeFireDispatch(rt) : fireReminder,
+        )
+      },
       list: (userId) => rt.schedule.listByUser(userId),
       cancel: (id) => rt.schedule.cancel(id),
+    }
+    // 定时任务链：schedule_task 工具经此调 rt.schedule.add（type=task + cron + makeFireDispatch，到点跑 Agent + 发结果）
+    ctx.cronTask = {
+      add: (info) => {
+        const cron = info.cron || parseCron(info.when)
+        if (!cron) return { error: `无法识别时间「${info.when || ''}」，支持：每天8点/每2小时/工作日9点/每周一8点30/每30分钟` }
+        return rt.schedule.add({ type: 'task', cron, prompt: info.prompt, userId: ctx.scopeUserId, groupId: ctx.groupId || null, selfId: ctx.selfId }, makeFireDispatch(rt))
+      },
     }
     // terminal 工具运行时配置（黑名单/超时/工作目录 + 沙盒 image/network/mounts）
     ctx.terminal = {
@@ -1006,6 +1107,7 @@ export class Chat extends plugin {
       const matched = rt.skills.match({ input: text, ctx })
       const skillText = rt.skills.assemble(matched)
       if (matched.length) Log.mark('[skill]', '命中说明书：', matched.map((s) => s.name).join(','))
+      devLog('skill', { matched: matched.map((s) => s.name), input: (text || '').slice(0, 100) }, traceId, ctx.devScope)
       context = [perception, skillText].filter(Boolean).join('\n\n') || undefined
       // B方案：附件清单注入 context——让 AI 明确知道本轮有哪些附件、可用
       // read_attachment/file_to_pdf(name:"<文件名>") 直接处理。根治"附件正文进了上下文
@@ -1117,12 +1219,15 @@ export class Chat extends plugin {
             if (__links.length === 1) {
               try { await this.e.reply(__links[0]) } catch { /* noop */ }
             } else if (__links.length > 1) {
+              // 多链接 → 合并转发卡片（Yunzai makeForwardMsg：e.group/friend/Bot.makeForwardMsg([{message},...]) → forward segment → reply）
               try {
-                const __nodes = __links.map((u) => ({ uin: String(this.e.self_id || this.e.selfId || ''), name: '链接', content: u }))
-                const __action = this.e.isGroup ? 'send_group_forward_msg' : 'send_private_forward_msg'
-                const __fp = this.e.isGroup ? { group_id: this.e.group_id, messages: __nodes } : { user_id: this.e.user_id, messages: __nodes }
-                const __r = this.e.bot?.sendApi ? await this.e.bot.sendApi(__action, __fp) : null
-                if (!__r || (__r.status !== 'ok' && __r.retcode !== 0)) throw new Error('forward unavailable')
+                const fwdMsg = __links.map((u) => ({ message: u }))
+                let fwd = null
+                if (this.e.isGroup && this.e.group?.makeForwardMsg) fwd = await this.e.group.makeForwardMsg(fwdMsg)
+                else if (this.e.friend?.makeForwardMsg) fwd = await this.e.friend.makeForwardMsg(fwdMsg)
+                else if (typeof Bot !== 'undefined' && Bot.makeForwardMsg) fwd = await Bot.makeForwardMsg(fwdMsg)
+                if (fwd) await this.e.reply(fwd)
+                else throw new Error('forward unavailable')
               } catch {
                 // 适配器不支持合并转发 → 降级一条文本
                 try { await this.e.reply(__links.join('\n')) } catch { /* noop */ }
@@ -1679,6 +1784,171 @@ export class Chat extends plugin {
     const ctx = ctxOf(this.e)
     const n = await rt.recall.forget(ctx.scopeUserId, kw)
     await this.e.reply(n ? `已遗忘 ${n} 条含「${kw}」的记忆` : `未找到含「${kw}」的记忆`)
+    return true
+  }
+
+  // —— 知识库（全局共享文档库，embedding RAG）——
+  async addKnowledge() {
+    const rt = await getRuntime()
+    const ctx = ctxOf(this.e)
+    if (!ctx.isMaster) return this.e.reply('仅主人可添加知识库'), true
+    let text = this.e.msg.replace(/^#知识库添加\s*/, '').trim()
+    // 回复一条消息入库：命令无文本但有 reply_id → 取被回复消息正文
+    if (!text && this.e.reply_id != null) {
+      try {
+        const replied = await (this.e.getReply?.() || this.e.bot?.getMsg?.(this.e.reply_id))
+        const msg = replied?.message
+        if (Array.isArray(msg)) text = msg.filter((s) => s?.type === 'text').map((s) => s.text || '').join('')
+        else if (typeof replied?.content === 'string') text = replied.content
+      } catch { /* noop */ }
+    }
+    if (!text) return this.e.reply('用法：\n#知识库添加 <文本或网址>\n例：\n#知识库添加 https://example.com\n#知识库添加 一段资料…\n或回复一条消息后发：#知识库添加'), true
+    // URL 入库：抓取网页正文（crawl4ai 优先，降级 fetch）→ ingest
+    if (/^https?:\/\//i.test(text)) {
+      await this.e.reply(`🌐 抓取入库中（${text}）…`)
+      const r = await rt.knowledge.ingestUrl(text)
+      if (r.error) return this.e.reply(r.error), true
+      await this.e.reply(`✓ 已抓取入库 ${r.id}：${r.title}\n${r.chunkCount} 块（via ${r.via}）${r.embedded ? '·已向量化' : '·关键词检索'}\n定时刷新最新：#知识库定时 ${r.id} 每天8点`)
+      return true
+    }
+    const r = await rt.knowledge.ingest(text, { source: `command:${ctx.userId}` })
+    if (r.error) return this.e.reply(r.error), true
+    await this.e.reply(`✓ 已入库 ${r.id}：${r.chunkCount} 块${r.embedded ? '（已向量化）' : '（未配 embedding，关键词检索）'}`)
+    return true
+  }
+
+  async listKnowledge() {
+    const rt = await getRuntime()
+    const docs = await rt.knowledge.listDocs()
+    if (!docs.length) return this.e.reply('知识库为空（web 知识库页 或 #知识库添加 入库）'), true
+    const lines = docs.map((d) => {
+      const tag = d.url ? '🌐' : '📄'
+      const cron = d.refreshCron ? ` ·定时(${d.refreshCron})` : ''
+      const refreshed = d.lastCrawled ? ` ·刷新${new Date(d.lastCrawled).toLocaleDateString('zh-CN')}` : ''
+      return `${tag} ${d.id} | ${d.title} | ${d.chunkCount}块${cron}${refreshed} | ${new Date(d.createdAt).toLocaleDateString('zh-CN')}`
+    })
+    await this.e.reply(`知识库（${docs.length} 篇；🌐=网页URL 可 #知识库刷新/#知识库定时）：\n${lines.join('\n')}`)
+    return true
+  }
+
+  async delKnowledge() {
+    const rt = await getRuntime()
+    const id = (this.e.msg.match(/^#知识库删除\s+(\S+)/) || [])[1] || ''
+    if (!id) return this.e.reply('用法：#知识库删除 <id>（id 见 #知识库列表）'), true
+    const n = await rt.knowledge.removeDoc(id)
+    await this.e.reply(n ? `已删除 ${id}` : `未找到 ${id}`)
+    return true
+  }
+
+  async rebuildKnowledge() {
+    const rt = await getRuntime()
+    await this.e.reply('开始重建知识库索引…')
+    const r = await rt.knowledge.rebuild()
+    await this.e.reply(r.error ? r.error : `✓ 重建完成：${r.rebuilt} 块`)
+    return true
+  }
+
+  async refreshKnowledge() {
+    const rt = await getRuntime()
+    if (!ctxOf(this.e).isMaster) return this.e.reply('仅主人可操作'), true
+    const id = (this.e.msg.match(/^#知识库刷新\s+(\S+)/) || [])[1] || ''
+    if (!id) return this.e.reply('用法：#知识库刷新 <id>（id 见 #知识库列表，仅 🌐 网页文档可刷新）'), true
+    await this.e.reply(`🔄 刷新中（${id}）…`)
+    const r = await rt.knowledge.refreshDoc(id)
+    if (r.error) return this.e.reply(r.error), true
+    await this.e.reply(`✓ 已刷新 ${id}：${r.chunkCount} 块（via ${r.via}）`)
+    return true
+  }
+
+  async refreshAllKnowledge() {
+    const rt = await getRuntime()
+    if (!ctxOf(this.e).isMaster) return this.e.reply('仅主人可操作'), true
+    const urlDocs = await rt.knowledge.listUrlDocs()
+    if (!urlDocs.length) return this.e.reply('知识库暂无网页 URL 文档（#知识库添加 <网址> 入库）'), true
+    await this.e.reply(`🔄 开始刷新 ${urlDocs.length} 个网页文档（串行）…`)
+    const r = await rt.knowledge.refreshAll()
+    await this.e.reply(`✓ 刷新完成：${r.refreshed}/${r.total} 成功`)
+    return true
+  }
+
+  async setKbRefresh() {
+    const rt = await getRuntime()
+    if (!ctxOf(this.e).isMaster) return this.e.reply('仅主人可操作'), true
+    const m = this.e.msg.match(/^#知识库定时\s+(\S+)\s+([\s\S]+)/) || []
+    const id = m[1] || ''
+    const when = (m[2] || '').trim()
+    if (!id || !when) return this.e.reply('用法：#知识库定时 <id> <时间>\n如：#知识库定时 kbXXX 每天8点\n时间支持：每天8点 / 每2小时 / 工作日9点 / 每周一8点30'), true
+    const cron = parseCron(when)
+    if (!cron) return this.e.reply(`无法识别时间「${when}」。支持：每天8点 / 每2小时 / 工作日9点 / 每周一8点30`), true
+    const r = await rt.knowledge.setRefresh(id, cron)
+    if (r.error) return this.e.reply(r.error), true
+    await this.e.reply(`✓ 已设定时刷新 ${id}\n周期：${when}（${cron}）\n取消：#知识库取消定时 ${id}`)
+    return true
+  }
+
+  async cancelKbRefresh() {
+    const rt = await getRuntime()
+    if (!ctxOf(this.e).isMaster) return this.e.reply('仅主人可操作'), true
+    const id = (this.e.msg.match(/^#知识库取消定时\s+(\S+)/) || [])[1] || ''
+    if (!id) return this.e.reply('用法：#知识库取消定时 <id>'), true
+    await rt.knowledge.cancelRefresh(id)
+    await this.e.reply(`✓ 已取消 ${id} 的定时刷新`)
+    return true
+  }
+
+  // —— 定时任务（cron 重复 + 任务链：到点跑 Agent 任务 + 发结果）——
+  async addCronTask() {
+    const rt = await getRuntime()
+    if (Config.get().agent?.schedule?.taskEnabled === false) return this.e.reply('定时任务功能已关闭'), true
+    const raw = this.e.msg.replace(/^#定时任务\s+/, '').trim()
+    const sp = raw.indexOf(' ')
+    if (sp < 0) return this.e.reply('用法：#定时任务 <时间> <任务描述>\n如：#定时任务 每天8点 搜索今日AI资讯\n时间支持：每天8点 / 每2小时 / 工作日9点 / 每周一8点30 / 每30分钟'), true
+    const when = raw.slice(0, sp).trim()
+    const prompt = raw.slice(sp + 1).trim()
+    const cron = parseCron(when)
+    if (!cron) return this.e.reply(`无法识别时间「${when}」。支持：每天8点 / 每2小时 / 工作日9点 / 每周一8点30 / 每30分钟`), true
+    const rec = await rt.schedule.add({
+      type: 'task', cron, prompt,
+      userId: String(this.e.user_id || ''), groupId: this.e.group_id ? String(this.e.group_id) : null,
+      selfId: String(this.e.self_id || this.e.selfId || ''),
+    }, makeFireDispatch(rt))
+    await this.e.reply(`✓ 定时任务 #${rec.id}\n周期：${when}（${cron}）\n任务：${prompt}`)
+    return true
+  }
+
+  async listCronTask() {
+    const rt = await getRuntime()
+    const tasks = (await rt.schedule.listAll()).filter((r) => r.type === 'task')
+    if (!tasks.length) return this.e.reply('暂无定时任务（#定时任务 <时间> <任务> 创建）'), true
+    const lines = tasks.map((r) => `#${r.id} | ${r.cron} | ${String(r.prompt).slice(0, 40)}`)
+    await this.e.reply(`定时任务（${tasks.length}）：\n${lines.join('\n')}`)
+    return true
+  }
+
+  async cancelCronTask() {
+    const rt = await getRuntime()
+    const id = (this.e.msg.match(/^#取消定时任务\s+(\S+)/) || [])[1] || ''
+    if (!id) return this.e.reply('用法：#取消定时任务 <id>（id 见 #定时任务列表）'), true
+    await rt.schedule.cancel(id)
+    await this.e.reply(`已取消定时任务 #${id}`)
+    return true
+  }
+
+  // —— LLM 自进化（手动触发；平时每 N 轮自动跑）——
+  async llmEvolve() {
+    const rt = await getRuntime()
+    if (!rt?.selfReview) return this.e.reply('⚠️ 自进化未启用（config agent.selfReview.enable）'), true
+    const ctx = ctxOf(this.e)
+    await this.e.reply('🧬 开始 LLM 自进化评审（近期对话轨迹 + 记忆快照 → 产出改进 suggestion）…')
+    try {
+      const r = await rt.selfReview.force(ctx)
+      if (r?.error) return this.e.reply(`⚠️ ${r.error}`), true
+      await this.e.reply(r.suggestionCount > 0
+        ? `✓ 自进化完成，产出 ${r.suggestionCount} 条 suggestion\n（memory 类已自动应用；prompt/技能类待审：#审阅进化）`
+        : '✓ 自进化完成，本轮无新 suggestion（近期对话暂无改进点）')
+    } catch (e) {
+      await this.e.reply(`⚠️ 评审失败：${e?.message || e}`)
+    }
     return true
   }
 

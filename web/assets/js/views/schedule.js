@@ -1,5 +1,5 @@
-/** 视图:定时任务(§3.4 · 单键全量数组) */
-(function () {
+/** 视图:定时任务（一次性提醒 + cron 重复任务链） */
+;(function () {
   window.VIEWS = window.VIEWS || {}
 
   window.VIEWS.schedule = {
@@ -9,34 +9,42 @@
       const { toast, fmt } = window.UI
       const M = window.MOCK
 
-      /* 每秒刷新倒计时 */
       const tick = ref(0)
       const timer = setInterval(() => tick.value++, 1000)
 
-      const jobs = computed(() => (M.schedules || []).slice().sort((a, b) => a.at - b.at))
-      /* 读 tick 建立依赖,模板每秒钟级刷新倒计时文本 */
+      const jobs = computed(() => (M.schedules || []).slice().sort((a, b) => {
+        // task(cron) 排前按 createdAt；reminder 按 at
+        if (a.type === 'task' && b.type !== 'task') return -1
+        if (a.type !== 'task' && b.type === 'task') return 1
+        if (a.type === 'task') return (a.createdAt || 0) - (b.createdAt || 0)
+        return (a.at || 0) - (b.at || 0)
+      }))
       const until = (ts) => { void tick.value; return fmt.until(ts) }
       const del = async (j) => {
         try {
           await window.api.del(`/schedule/${j.id}`)
           await window.store.loadSchedule()
-          toast('已取消该定时任务', 'info')
+          toast('已取消该任务', 'info')
         } catch (e) { toast(e.message, 'error') }
       }
 
-      const addModal = ref({ show: false, message: '', groupId: '', inHours: 2 })
+      const addModal = ref({ show: false, type: 'reminder', message: '', groupId: '', inHours: 2, when: '', prompt: '' })
       const add = async () => {
         const m = addModal.value
-        if (!m.message.trim()) { toast('请填写提醒内容', 'warn'); return }
+        const body = { userId: window.MOCK.config?.masters?.[0] || 'master', groupId: m.groupId || null }
+        if (m.type === 'task') {
+          if (!m.when.trim() || !m.prompt.trim()) { toast('任务链需时间 + 任务描述', 'warn'); return }
+          body.type = 'task'; body.when = m.when.trim(); body.prompt = m.prompt.trim()
+        } else {
+          if (!m.message.trim()) { toast('请填写提醒内容', 'warn'); return }
+          body.message = m.message.trim(); body.at = Date.now() + m.inHours * 3600e3
+        }
         try {
-          await window.api.post('/schedule', {
-            userId: '2854196310', groupId: m.groupId || null,
-            message: m.message.trim(), at: Date.now() + m.inHours * 3600e3,
-          })
+          await window.api.post('/schedule', body)
           await window.store.loadSchedule()
-          toast('定时任务已创建')
+          toast(m.type === 'task' ? '定时任务已创建（到点跑 Agent + 发结果）' : '提醒已创建')
           addModal.value.show = false
-          addModal.value.message = ''
+          addModal.value.message = ''; addModal.value.when = ''; addModal.value.prompt = ''
         } catch (e) { toast(e.message, 'error') }
       }
 
@@ -50,54 +58,66 @@
       <div class="sec-head" style="--i:0">
         <div>
           <h3>定时任务</h3>
-          <div class="desc">键 Yz:agent:rem:jobs · 单键全量数组 · 到点由 bot(selfId) 向群/私聊投递提醒</div>
+          <div class="desc">一次性提醒（到点发静态消息）+ cron 重复任务链（到点跑 Agent + 发结果）。时间支持自然语言：每天8点 / 每2小时 / 工作日9点</div>
         </div>
-        <button class="btn btn-primary" @click="addModal.show = true"><v-icon name="plus"/>新建提醒</button>
+        <button class="btn btn-primary" @click="addModal.show = true"><v-icon name="plus"/>新建任务</button>
       </div>
 
       <div class="grid grid-3 stagger">
         <div v-for="(j, i) in jobs" :key="j.id" class="card hoverable card-pad" :style="{'--i': i + 1}">
           <div class="flex between">
-            <span class="chip" :class="j.groupId ? 'chip-sky' : 'chip-violet'">
-              <v-icon :name="j.groupId ? 'group' : 'user'"/>{{ j.groupId ? '群 ' + j.groupId : '私聊' }}
+            <span class="chip" :class="j.type === 'task' ? 'chip-green' : (j.groupId ? 'chip-sky' : 'chip-violet')">
+              <v-icon :name="j.type === 'task' ? 'tool' : (j.groupId ? 'group' : 'user')"/>{{ j.type === 'task' ? '任务链' : (j.groupId ? '群 ' + j.groupId : '私聊') }}
             </span>
             <button class="icon-btn danger" @click="del(j)"><v-icon name="trash"/></button>
           </div>
-          <p class="mt10" style="font-size:13.5px;font-weight:600;line-height:1.7;min-height:44px">{{ j.message }}</p>
-          <div class="divider" style="margin:12px 0"></div>
-          <div class="flex between">
-            <div>
-              <div style="font-weight:800;font-size:15px;color:var(--primary)" class="num">{{ until(j.at) }}</div>
-              <div class="muted-3" style="font-size:11px">{{ new Date(j.at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) }} 触发</div>
-            </div>
-            <div class="muted-3" style="font-size:11px;text-align:right">
-              <div>bot {{ j.selfId }}</div>
-              <div class="mono">{{ j.id }}</div>
-            </div>
-          </div>
+          <template v-if="j.type === 'task'">
+            <div class="mono mt10" style="font-size:12px;color:var(--teal)">⏱ {{ j.cron }}</div>
+            <p class="mt6" style="font-size:13.5px;font-weight:600;line-height:1.7;min-height:44px">{{ j.prompt }}</p>
+          </template>
+          <template v-else>
+            <p class="mt10" style="font-size:13.5px;font-weight:600;line-height:1.7;min-height:44px">{{ j.message }}</p>
+            <div class="divider" style="margin:12px 0"></div>
+            <div style="font-weight:800;font-size:15px;color:var(--primary)" class="num">{{ until(j.at) }}</div>
+            <div class="muted-3" style="font-size:11px">{{ new Date(j.at).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' }) }} 触发</div>
+          </template>
+          <div class="muted-3" style="font-size:11px;text-align:right;margin-top:8px">bot {{ j.selfId || '?' }} · #{{ j.id }}</div>
         </div>
       </div>
       <empty-state v-if="!jobs.length" icon="schedule" text="暂无定时任务"/>
 
-      <!-- 新建 -->
-      <v-modal v-if="addModal.show" title="新建定时提醒(模拟)" icon="plus" @close="addModal.show = false">
-        <div class="grid grid-2" style="gap:14px">
-          <div class="field" style="grid-column:1/-1">
-            <label class="field-label">提醒内容</label>
-            <textarea class="textarea" v-model="addModal.message" placeholder="例如:提醒开黑前重启测试服 bot"></textarea>
+      <v-modal v-if="addModal.show" title="新建定时任务" icon="plus" @close="addModal.show = false">
+        <div class="flex gap6 mb12">
+          <button class="btn" :class="addModal.type==='reminder'?'btn-primary':'btn-ghost'" @click="addModal.type='reminder'">一次性提醒</button>
+          <button class="btn" :class="addModal.type==='task'?'btn-primary':'btn-ghost'" @click="addModal.type='task'">cron 重复任务</button>
+        </div>
+        <div class="field mb10">
+          <label class="field-label">目标群（留空=私聊）</label>
+          <input class="input" v-model="addModal.groupId" placeholder="群号">
+        </div>
+        <template v-if="addModal.type==='task'">
+          <div class="field mb10">
+            <label class="field-label">时间（自然语言）</label>
+            <input class="input" v-model="addModal.when" placeholder="每天8点 / 每2小时 / 工作日9点 / 每周一8点30 / 每30分钟">
           </div>
           <div class="field">
-            <label class="field-label">目标群(留空=私聊)</label>
-            <input class="input" v-model="addModal.groupId" placeholder="群号,如 960179589">
+            <label class="field-label">任务描述（到点 Agent 执行 + 发结果）</label>
+            <textarea class="textarea" v-model="addModal.prompt" placeholder="如：搜索今日AI资讯并总结5条"></textarea>
+          </div>
+        </template>
+        <template v-else>
+          <div class="field mb10">
+            <label class="field-label">提醒内容</label>
+            <textarea class="textarea" v-model="addModal.message" placeholder="到点发送的文本"></textarea>
           </div>
           <div class="field">
             <label class="field-label">N 小时后触发</label>
             <input type="number" class="input" min="1" v-model.number="addModal.inHours">
           </div>
-        </div>
+        </template>
         <template #foot>
           <button class="btn btn-ghost" @click="addModal.show = false">取消</button>
-          <button class="btn btn-primary" @click="add"><v-icon name="check"/>创建(模拟)</button>
+          <button class="btn btn-primary" @click="add"><v-icon name="check"/>创建</button>
         </template>
       </v-modal>
     </div>`,

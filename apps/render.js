@@ -26,7 +26,7 @@ let _shotSeq = 0
  * 用「name + 自增序号」做唯一 tplFile：保证每次都重新读取最新 HTML，避开渲染器的模板缓存
  * （聊天列表 / 人设列表等内容会变化）。失败返回 null，调用方据此降级为文本。
  */
-export async function screenshot(name, html) {
+export const screenshot = async (name, html) => {
   try {
     const mod = await import('../../../lib/puppeteer/puppeteer.js')
     const puppeteer = mod.default || mod
@@ -57,7 +57,7 @@ export async function screenshot(name, html) {
  * 把一段文本（markdown）渲染成回复图片（segment.image），失败返回 null。
  * markdown→HTML 用 marked+highlight.js（依赖缺失时自动降级为简易渲染）；截图经 Yunzai 渲染器。
  */
-export async function renderReplyImage(content, { scale = 3, footer, extraCss, chat } = {}) {
+export const renderReplyImage = async (content, { scale = 3, footer, extraCss, chat } = {}) => {
   const sc = Math.min(Math.max(Number(scale) || 3, 1), 4) // clamp [1,4]，防 Chromium OOM
   try {
     const bodyHtml = await inlineImages(await mdToHtml(content)) // 远程图片下载转 base64 内联（防盗链+可靠），见 model/render/inline-images.js
@@ -191,7 +191,7 @@ async function withPage(html, fn) {
  * @param {object} opts { path, format='A4' }
  * @returns {Promise<string|null>} 成功返回写入路径，失败 null
  */
-export async function renderPdf(html, { path: outPath, format = 'A4' } = {}) {
+export const renderPdf = async (html, { path: outPath, format = 'A4' } = {}) => {
   if (!outPath) return null
   try {
     await fs.promises.mkdir(path.dirname(outPath), { recursive: true })
@@ -220,7 +220,7 @@ export async function renderPdf(html, { path: outPath, format = 'A4' } = {}) {
  * @param {object} opts { scale=2, imgType='png', width=820 }
  * @returns {Promise<Buffer|null>}
  */
-export async function renderHd(name, html, { scale = 2, imgType = 'png', width = 820 } = {}) {
+export const renderHd = async (name, html, { scale = 2, imgType = 'png', width = 820 } = {}) => {
   const buff = await withPage(html, async (page) => {
     await page.setViewport({ width, height: 1200, deviceScaleFactor: scale })
     const opt = { type: imgType, fullPage: true }
